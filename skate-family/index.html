@@ -15,22 +15,13 @@
   <link rel="apple-touch-icon" sizes="180x180" href="/icons/skate-180-v6.png" />
   <link rel="apple-touch-icon-precomposed" sizes="180x180" href="/icons/skate-180-v6.png" />
   <link rel="stylesheet" href="/src/style.css?v=5" />
-  <style>
-    #programJudgeCard.pj-fixed-launch{position:fixed;z-index:45;left:14px;right:14px;bottom:calc(78px + env(safe-area-inset-bottom));max-width:732px;margin:0 auto;pointer-events:none}
-    #programJudgeCard.pj-fixed-launch button{pointer-events:auto;width:100%;border:0;border-radius:16px;padding:14px 16px;background:#0f7bea;color:#fff;font:800 15px -apple-system,BlinkMacSystemFont,"SF Pro Display","Segoe UI",Roboto,Arial,sans-serif;box-shadow:0 10px 28px rgba(15,123,234,.32)}
-    @media(min-width:760px){#programJudgeCard.pj-fixed-launch{left:50%;right:auto;width:732px;transform:translateX(-50%)}}
-  </style>
   <title>SKATE — аналіз фігурного катання</title>
 </head>
 <body>
   <div id="app"></div>
-  <div id="programJudgeCard" class="pj-fixed-launch">
-    <input id="programJudgeFile" type="file" accept="video/*" hidden>
-    <button id="pickProgramJudge" type="button">🏆 Оцінити весь виступ</button>
-  </div>
   <script type="module" src="/src/main-v11.js?v=15"></script>
   <script type="module" src="/src/cascade-presets.js?v=21"></script>
   <script type="module" src="/src/suggestion-calibration.js?v=23"></script>
-  <script type="module" src="/src/program-ui.js?v=2"></script>
+  <script type="module" src="/src/program-ui.js?v=3"></script>
 </body>
 </html>
