@@ -179,7 +179,7 @@ function spinCandidates(frames,jumps){
     const rotations=yawRotation(seg);
     if(dur<1.0||rotations<1.5)continue;
     if(std(seg.map(x=>x.hipX))>.09||std(seg.map(x=>x.hipY))>.07)continue;
-    out.push({id:crypto.randomUUID(),kind:'spin',time:round((seg[0].t+seg.at(-1).t)/2,2),code:'',suggestion:'Spin?',goe:0,confidence:Math.round(clamp(avg(seg.map(x=>x.conf))*80+rotations*3,35,88)),metrics:{rotations:round(rotations,1),duration:round(dur,1)}});
+    out.push({id:crypto.randomUUID(),kind:'spin',time:round((seg[0].t+seg.at(-1].t)/2,2),code:'',suggestion:'Spin?',goe:0,confidence:Math.round(clamp(avg(seg.map(x=>x.conf))*80+rotations*3,35,88)),metrics:{rotations:round(rotations,1),duration:round(dur,1)}});
   }
   const dedup=[];for(const x of out){if(dedup.every(y=>Math.abs(y.time-x.time)>2.5))dedup.push(x)}
   return dedup.slice(0,4);
@@ -204,7 +204,6 @@ function componentScores(frames,elements,duration){
 }
 
 export async function analyzeProgram(video,onProgress=()=>{}){
-  detectionClock=0;
   const pose=await initPose();
   const duration=Math.min(video.duration||0,330);
   if(!duration||duration<8)throw new Error('Для оцінки виступу потрібне відео довше 8 секунд');
@@ -231,7 +230,7 @@ export async function analyzeProgram(video,onProgress=()=>{}){
   const pcs=componentScores(frames,elements,duration);
   const confidence=Math.round(clamp(avg(frames.map(x=>x.conf))*100-(elements.length===0?18:0)-(frames.length/times.length<.7?12:0),25,94));
   onProgress(96);
-  return {duration:round(duration,1),elements,pcs,fallCount:0,confidence,framesSeen:frames.length,version:'local-isu-v1'};
+  return {duration:round(duration,1),elements,pcs,fallCount:0,confidence,framesSeen:frames.length,version:'local-isu-v2'};
 }
 
 const isJump=code=>/^\d[TSLoFzA]/.test(code||'');
