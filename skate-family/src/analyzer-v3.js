@@ -1,4 +1,5 @@
 import { analyzeVideo as baseAnalyzeVideo, estimateElement as baseEstimateElement } from '/skate-family/src/analyzer.js?v=9';
+export { initPose } from '/skate-family/src/analyzer.js?v=9';
 
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
 const round=(v,n=2)=>{const p=10**n;return Math.round(v*p)/p};
