@@ -10,8 +10,8 @@ const smooth=(a,w=1)=>a.map((_,i)=>avg(a.slice(Math.max(0,i-w),Math.min(a.length
 
 async function loadVision(){
   const sources=[
-    `${MP_CDN}/vision_bundle.mjs?skate=17`,
-    `https://unpkg.com/@mediapipe/tasks-vision@${MP_VERSION}/vision_bundle.mjs?skate=17`
+    `${MP_CDN}/vision_bundle.mjs?skate=18`,
+    `https://unpkg.com/@mediapipe/tasks-vision@${MP_VERSION}/vision_bundle.mjs?skate=18`
   ];
   let last;
   for(const src of sources){
@@ -161,14 +161,13 @@ export async function detectJumpCandidates(video,{expectedCount=null,seriesMode=
     }
 
     if(!expectedCount&&seriesMode){
+      // Auto mode is intentionally conservative: most combinations are two jumps.
+      // Returning a third weak motion after landing/fall is more harmful than asking
+      // the user to choose the explicit 3-jump mode when they really have three.
       if(candidates.length===0&&secondaryPool.length){
-        candidates=chooseSeparated(secondaryPool,.26,4);
+        candidates=chooseSeparated(secondaryPool,.26,2);
       }
       if(candidates.length===1){
-        // Multi-jump mode explicitly means there is more than one element. Search the
-        // whole remaining clip for the strongest second take-off instead of requiring
-        // it to be within 1.5 s of the first. This fixes cascades with a long setup or
-        // a fall after the second jump.
         const anchor=candidates[0];
         const secondPool=secondaryPool.filter(c=>Math.abs(c.time-anchor.time)>=.22&&Math.abs(c.time-anchor.time)<=3.5);
         candidates=addBest(candidates,secondPool,{minGap:.22,maxGap:3.5,maxCount:2,preferAfter:true});
@@ -176,8 +175,7 @@ export async function detectJumpCandidates(video,{expectedCount=null,seriesMode=
       if(candidates.length>1){
         const top=Math.max(...candidates.map(c=>c.score));
         candidates=candidates.filter(c=>c.score>=top*.11&&c.confidence>=22);
-        candidates=chooseSeparated(candidates,.25,4);
-        candidates=suppressMiddleFalsePositives(candidates);
+        candidates=chooseSeparated(candidates,.25,2);
       }
     }else if(!expectedCount&&candidates.length>1){
       const top=Math.max(...candidates.map(c=>c.score));
