@@ -1,4 +1,4 @@
-import { detectJumpCandidates } from './jump-detector.js?v=13';
+import { detectJumpCandidates } from './jump-detector.js?v=15';
 
 const PRESETS=[
   {label:'2S + 2T',parts:['2S','2T']},{label:'2S + 2Lo',parts:['2S','2Lo']},{label:'2T + 2T',parts:['2T','2T']},{label:'2Lo + 2T',parts:['2Lo','2T']},{label:'2F + 2T',parts:['2F','2T']},{label:'2F + 2Lo',parts:['2F','2Lo']},{label:'2Lz + 2T',parts:['2Lz','2T']},{label:'2Lz + 2Lo',parts:['2Lz','2Lo']},{label:'2A + 2T',parts:['2A','2T']},{label:'2A + 2Lo',parts:['2A','2Lo']},
@@ -24,7 +24,13 @@ function ensureEulerOption(select){
 
 function presetOptions(){
   const group=(label,list)=>`<optgroup label="${label}">${list.map(x=>`<option value="${x.parts.join('|')}">${x.label}</option>`).join('')}</optgroup>`;
-  return `<option value="">Не знаю / окремі стрибки</option>${group('Каскади — 2 стрибки',PRESETS.filter(x=>x.parts.length===2))}${group('Каскади — 3 стрибки',PRESETS.filter(x=>x.parts.length===3))}`;
+  return `<option value="">Авто — кількість невідома</option><optgroup label="Знаю лише кількість"><option value="count:2">Каскад із 2 стрибків</option><option value="count:3">Каскад із 3 стрибків</option></optgroup>${group('Готові каскади — 2 стрибки',PRESETS.filter(x=>x.parts.length===2))}${group('Готові каскади — 3 стрибки',PRESETS.filter(x=>x.parts.length===3))}`;
+}
+
+function selection(){
+  if(!selectedPreset)return {parts:null,expectedCount:null};
+  if(selectedPreset.startsWith('count:'))return {parts:null,expectedCount:Number(selectedPreset.split(':')[1])||null};
+  const parts=selectedPreset.split('|').filter(Boolean);return {parts,expectedCount:parts.length||null};
 }
 
 function wait(ms=35){return new Promise(r=>setTimeout(r,ms))}
@@ -46,12 +52,34 @@ function clearMarkers(){
   while(document.querySelector('.removeMarker')&&guard<12){document.querySelector('.removeMarker').click();guard++}
 }
 
+function syncRunGuard(){
+  const run=document.querySelector('#run'),add=document.querySelector('#addMarker');
+  if(!run||!add)return;
+  const selects=[...document.querySelectorAll('.markerElement')];
+  selects.forEach(s=>{
+    ensureEulerOption(s);
+    if(!s.dataset.skateGuardBound){s.dataset.skateGuardBound='1';s.addEventListener('change',()=>setTimeout(syncRunGuard,0))}
+  });
+  if(selects.length<2)return;
+  const unknown=selects.filter(s=>s.value==='auto').length;
+  if(unknown){
+    run.dataset.structureGuard='1';run.disabled=true;
+    run.textContent=`Вибери типи ${selects.length} стрибків`;
+    let note=document.querySelector('[data-structure-guard-note]');
+    if(!note){note=document.createElement('div');note.dataset.structureGuardNote='1';note.style.cssText='font-size:11px;line-height:1.4;margin-top:8px;padding:9px 10px;border-radius:11px;background:#fff6dd;color:#70510d;font-weight:750';run.insertAdjacentElement('beforebegin',note)}
+    note.textContent='GOE не рахується, поки тип кожного знайденого стрибка не підтверджений. Це захищає від помилок на кшталт 1J + 1J + 1J.';
+  }else{
+    if(run.dataset.structureGuard==='1'){run.disabled=false;run.textContent=`Аналізувати ${selects.length} стрибки`;delete run.dataset.structureGuard}
+    document.querySelector('[data-structure-guard-note]')?.remove();
+  }
+}
+
 function applyPreset(parts){
   if(!parts?.length)return false;
   const selects=[...document.querySelectorAll('.markerElement')];selects.forEach(ensureEulerOption);
   if(selects.length!==parts.length)return false;
   parts.forEach((part,i)=>{selects[i].value=part;selects[i].dispatchEvent(new Event('change',{bubbles:true}))});
-  return true;
+  setTimeout(syncRunGuard,0);return true;
 }
 
 async function autoDetect(button,status){
@@ -60,9 +88,9 @@ async function autoDetect(button,status){
   detecting=true;button.disabled=true;
   const original=button.textContent;
   try{
-    const parts=selectedPreset?selectedPreset.split('|'):null;
-    status.textContent='SKATE переглядає відео і шукає моменти відриву…';
-    const found=await detectJumpCandidates(video,{expectedCount:parts?.length||null,onProgress:p=>{button.textContent=`Шукаю стрибки… ${p}%`}});
+    const sel=selection();
+    status.textContent='SKATE переглядає відео і відділяє справжній відрив від піднятої вільної ноги…';
+    const found=await detectJumpCandidates(video,{expectedCount:sel.expectedCount,onProgress:p=>{button.textContent=`Шукаю стрибки… ${p}%`}});
     if(!found.length)throw new Error('Не вдалося впевнено знайти стрибки автоматично');
 
     clearMarkers();await wait(60);
@@ -72,39 +100,48 @@ async function autoDetect(button,status){
       add.click();await wait(70);
     }
 
-    const applied=parts?applyPreset(parts):false;
-    const expected=parts?.length;
-    status.textContent=expected&&found.length!==expected
-      ?`Знайдено ${found.length}, а у вибраному каскаді ${expected}. Можеш видалити зайве або додати пропущений вручну.`
-      :`Готово: автоматично знайдено ${found.length} ${found.length===2?'стрибки':'стрибків'}. ${applied?'Типи каскаду вже підставлені.':'Перевір типи та натисни «Аналізувати».'}`;
-    toast(`Автоматично знайдено ${found.length} стрибки`);
+    const applied=sel.parts?applyPreset(sel.parts):false;
+    const avgConfidence=Math.round(found.reduce((s,x)=>s+(x.confidence||55),0)/found.length);
+    if(sel.expectedCount&&found.length!==sel.expectedCount){
+      status.textContent=`Знайдено ${found.length}, очікувалось ${sel.expectedCount}. Автопошук не буде вигадувати відсутній стрибок — перевір список нижче.`;
+    }else if(applied){
+      status.textContent=`Готово: знайдено ${found.length}. ${sel.parts.join(' + ')} підставлено автоматично · довіра пошуку ${avgConfidence}%.`;
+    }else{
+      status.textContent=`Готово: знайдено ${found.length} ${found.length===1?'стрибок':found.length<5?'стрибки':'стрибків'} · довіра пошуку ${avgConfidence}%. Тепер вибери тип кожного зі списків нижче — лише після цього SKATE дозволить рахувати GOE.`;
+    }
+    syncRunGuard();
+    toast(`Знайдено ${found.length} ${found.length===1?'стрибок':'стрибки'}`);
   }catch(e){
     status.textContent='Автопошук не змінив твої мітки. Можна спробувати ще раз або додати лише пропущений стрибок вручну.';
     toast(e.message||'Не вдалося знайти стрибки');
   }finally{
-    detecting=false;button.disabled=false;button.textContent=original;
+    detecting=false;button.disabled=false;button.textContent=original;syncRunGuard();
   }
 }
 
 function enhance(){
   const add=document.querySelector('#addMarker');if(!add)return;
-  const parent=add.parentElement;if(!parent||parent.querySelector('[data-cascade-presets]'))return;
   document.querySelectorAll('.markerElement').forEach(ensureEulerOption);
+  syncRunGuard();
+  const parent=add.parentElement;if(!parent||parent.querySelector('[data-cascade-presets]'))return;
 
   add.textContent='＋ Додати пропущений стрибок вручну';
   add.style.marginTop='8px';
 
   const wrap=document.createElement('div');wrap.dataset.cascadePresets='1';wrap.style.cssText='margin-bottom:10px;border:1px solid var(--line);border-radius:16px;padding:12px;background:#f8fbfd';
-  wrap.innerHTML=`<label style="display:block;font-size:11px;font-weight:900;color:var(--muted);letter-spacing:.04em;margin-bottom:6px">КАСКАД / СЕРІЯ</label><select id="cascadePreset" style="width:100%;border:1px solid var(--line);border-radius:11px;padding:11px;background:white;font-weight:800;color:#102231">${presetOptions()}</select><button id="autoFindJumps" class="primary" style="margin-top:10px">✨ Знайти стрибки автоматично</button><div id="autoFindStatus" style="font-size:11px;color:var(--muted);margin-top:7px;line-height:1.4">Не треба перемотувати відео вручну. SKATE сам знайде моменти стрибків, а ти лише перевіриш результат.</div>`;
+  wrap.innerHTML=`<label style="display:block;font-size:11px;font-weight:900;color:var(--muted);letter-spacing:.04em;margin-bottom:6px">КАСКАД / СЕРІЯ</label><select id="cascadePreset" style="width:100%;border:1px solid var(--line);border-radius:11px;padding:11px;background:white;font-weight:800;color:#102231">${presetOptions()}</select><button id="autoFindJumps" class="primary" style="margin-top:10px">✨ Знайти стрибки автоматично</button><div id="autoFindStatus" style="font-size:11px;color:var(--muted);margin-top:7px;line-height:1.4">Обери готовий каскад або лише кількість стрибків. Моменти відриву SKATE знайде сам.</div>`;
   parent.insertBefore(wrap,add);
 
   const select=wrap.querySelector('#cascadePreset');select.value=selectedPreset;
   select.addEventListener('change',e=>{
     selectedPreset=e.target.value;
-    if(!selectedPreset)return;
-    const parts=selectedPreset.split('|');
-    if(applyPreset(parts))toast(`Обрано ${parts.join(' + ')}`);
-    else wrap.querySelector('#autoFindStatus').textContent=`Обрано ${parts.join(' + ')}. Натисни «Знайти стрибки автоматично» — SKATE шукатиме ${parts.length} відриви.`;
+    const sel=selection();
+    if(sel.parts&&applyPreset(sel.parts))toast(`Обрано ${sel.parts.join(' + ')}`);
+    const status=wrap.querySelector('#autoFindStatus');
+    if(sel.parts&&!document.querySelectorAll('.markerElement').length)status.textContent=`Обрано ${sel.parts.join(' + ')}. Натисни «Знайти стрибки автоматично».`;
+    else if(sel.expectedCount&&!sel.parts)status.textContent=`SKATE шукатиме рівно ${sel.expectedCount} стрибки. Після пошуку залишиться лише вибрати їх типи.`;
+    else if(!sel.expectedCount)status.textContent='SKATE сам оцінить кількість, але GOE з’явиться тільки після підтвердження типів.';
+    syncRunGuard();
   });
   const button=wrap.querySelector('#autoFindJumps'),status=wrap.querySelector('#autoFindStatus');button.addEventListener('click',()=>autoDetect(button,status));
 }
