@@ -1,4 +1,4 @@
-import { initPose } from './analyzer.js';
+import { initPose } from '/skate-family/src/analyzer.js?v=9';
 
 const G=9.80665;
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
