@@ -1,4 +1,4 @@
-const CACHE='skate-v9';
+const CACHE='skate-v10';
 const ASSETS=[
   '/',
   '/manifest.webmanifest?v=6',
@@ -8,6 +8,7 @@ const ASSETS=[
   '/src/main.js?v=9',
   '/src/style.css?v=5',
   '/src/analyzer.js?v=9',
+  '/skate-family/src/analyzer.js?v=9',
   '/src/db.js'
 ];
 
@@ -24,16 +25,10 @@ self.addEventListener('activate',e=>e.waitUntil(Promise.all([
 self.addEventListener('fetch',e=>{
   if(e.request.method!=='GET')return;
   const url=new URL(e.request.url);
-
-  // Keep cross-origin MediaPipe/model/CDN traffic outside the PWA cache.
   if(url.origin!==self.location.origin)return;
 
   if(e.request.mode==='navigate'){
-    e.respondWith(
-      fetch(e.request)
-        .then(r=>r)
-        .catch(()=>caches.match('/'))
-    );
+    e.respondWith(fetch(e.request).catch(()=>caches.match('/')));
     return;
   }
 
