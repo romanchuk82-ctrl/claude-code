@@ -48,14 +48,23 @@ function frameMetrics(res,t){
   if(!l||!w)return null;
   const hipX=(l[23].x+l[24].x)/2, hipY=(l[23].y+l[24].y)/2;
   const shoulderX=(l[11].x+l[12].x)/2, shoulderY=(l[11].y+l[12].y)/2;
+  const ankleX=(l[27].x+l[28].x)/2, ankleY=(l[27].y+l[28].y)/2;
   const shoulderWidth=Math.hypot(l[12].x-l[11].x,l[12].y-l[11].y);
   const hipWidth=Math.hypot(l[24].x-l[23].x,l[24].y-l[23].y);
+  const body=Math.max(.08,Math.hypot(ankleX-shoulderX,ankleY-shoulderY));
   const axis=Math.abs(deg(Math.atan2(shoulderX-hipX,hipY-shoulderY)));
   const yaw=Math.atan2(w[12].z-w[11].z,w[12].x-w[11].x);
-  const conf=avg([l[11],l[12],l[23],l[24],l[27],l[28]].map(p=>p.visibility||0));
+  const conf=avg([l[11],l[12],l[23],l[24],l[25],l[26],l[27],l[28],l[31],l[32]].map(p=>p.visibility||0));
   const armSpread=Math.hypot(l[16].x-l[15].x,l[16].y-l[15].y)/(shoulderWidth||.1);
   const kneeBend=avg([Math.abs(l[25].y-l[23].y),Math.abs(l[26].y-l[24].y)]);
-  return {t,hipX,hipY,axis,yaw,shoulderWidth,hipWidth,conf,armSpread,kneeBend};
+  const ankleSep=Math.hypot(l[27].x-l[28].x,l[27].y-l[28].y)/body;
+  const ankleYDiff=Math.abs(l[27].y-l[28].y)/body;
+  const toeYDiff=Math.abs(l[31].y-l[32].y)/body;
+  const leftFoot=Math.hypot(l[31].x-l[27].x,l[31].y-l[27].y)/body;
+  const rightFoot=Math.hypot(l[32].x-l[28].x,l[32].y-l[28].y)/body;
+  const footAsym=Math.abs(leftFoot-rightFoot);
+  const kneeYDiff=Math.abs(l[25].y-l[26].y)/body;
+  return {t,hipX,hipY,axis,yaw,shoulderWidth,hipWidth,body,conf,armSpread,kneeBend,ankleSep,ankleYDiff,toeYDiff,footAsym,kneeYDiff};
 }
 
 function seek(video,t){
@@ -119,6 +128,20 @@ function coarseJumpCenters(frames){
   return keep.sort((a,b)=>a.t-b.t).slice(0,16);
 }
 
+function takeoffFeatures(frames,s,peak){
+  const pre=frames.slice(Math.max(0,s-5),Math.min(frames.length,s+2));
+  const body=median(pre.map(x=>x.body))||.4;
+  const baseline=median(frames.slice(0,Math.max(3,s)).map(x=>x.hipY));
+  const hipLift=clamp((baseline-frames[peak].hipY)/body,0,1);
+  const ankleSep=median(pre.map(x=>x.ankleSep));
+  const ankleYDiff=median(pre.map(x=>x.ankleYDiff));
+  const toeYDiff=median(pre.map(x=>x.toeYDiff));
+  const footAsym=median(pre.map(x=>x.footAsym));
+  const kneeYDiff=median(pre.map(x=>x.kneeYDiff));
+  const toeAssist=clamp(Math.max(ankleYDiff*.9,toeYDiff*.9,footAsym*1.5,kneeYDiff*.55),0,1);
+  return {ankleSep:round(ankleSep,3),ankleYDiff:round(ankleYDiff,3),toeYDiff:round(toeYDiff,3),footAsym:round(footAsym,3),kneeYDiff:round(kneeYDiff,3),toeAssist:round(toeAssist,3),hipLift:round(hipLift,3)};
+}
+
 function flightFromFine(frames){
   if(frames.length<8)return null;
   const ys=frames.map(f=>f.hipY);
@@ -139,14 +162,47 @@ function flightFromFine(frames){
   const landing=frames.slice(e,Math.min(frames.length,e+6));
   const stability=clamp(100-(avg(landing.map(x=>x.axis))*1.1+std(landing.map(x=>x.hipY))*1000+std(landing.map(x=>x.shoulderWidth))*700),0,100);
   const height=G*airtime*airtime/8;
-  return {time:round(frames[peak].t,2),airtime:round(airtime,2),height:round(height,2),rotation:round(rotation,2),axis:round(axis,1),stability:Math.round(stability),confidence:Math.round(clamp(avg(segment.map(x=>x.conf))*100+(amp>.018?8:0)-(rotation<.45?15:0),20,97))};
+  const takeoff=takeoffFeatures(frames,s,peak);
+  return {time:round(frames[peak].t,2),airtime:round(airtime,2),height:round(height,2),rotation:round(rotation,2),axis:round(axis,1),stability:Math.round(stability),takeoff,confidence:Math.round(clamp(avg(segment.map(x=>x.conf))*100+(amp>.018?8:0)-(rotation<.45?15:0),20,97))};
 }
 
-function suggestJump(rotation){
-  const candidates=[['1T',1],['1A',1.5],['2T',2],['2A',2.5],['3T',3],['3A',3.5],['4T',4],['4A',4.5]];
-  let best=candidates[0],d=99;
-  for(const c of candidates){const x=Math.abs(rotation-c[1]);if(x<d){best=c;d=x}}
-  return {code:best[0],distance:d};
+function rotationClass(m){
+  const air=m.airtime||0;
+  let revolutions=air>=.64?4:air>=.47?3:air>=.255?2:1;
+  const measured=m.rotation||0;
+  const integer=clamp(Math.round(measured),1,4);
+  if(measured>=.70&&Math.abs(measured-integer)<.22&&Math.abs(integer-revolutions)<=1)revolutions=integer;
+  const halves=[1.5,2.5,3.5,4.5];
+  let half=halves[0],halfDist=99;
+  for(const h of halves){const d=Math.abs(measured-h);if(d<halfDist){half=h;halfDist=d}}
+  const intDist=Math.abs(measured-Math.round(measured));
+  const axel=measured>=1.18&&halfDist<.30&&halfDist+.07<intDist&&Math.abs(Math.floor(half)-revolutions)<=1;
+  if(axel)revolutions=clamp(Math.floor(half),1,4);
+  return {revolutions,axel,expected:axel?revolutions+.5:revolutions,rotationDistance:axel?halfDist:Math.abs(measured-revolutions)};
+}
+
+function suggestJump(m){
+  const r=rotationClass(m);
+  if(r.axel){
+    const code=`${r.revolutions}A`;
+    return {code,alternatives:[code],distance:r.rotationDistance,confidence:Math.round(clamp(72-r.rotationDistance*75+(m.confidence-60)*.18,48,88)),family:'A'};
+  }
+
+  const f=m.takeoff||{};
+  const sep=Number(f.ankleSep||0),toe=Number(f.toeAssist||0),footAsym=Number(f.footAsym||0);
+  const loopScore=clamp((.30-sep)*4.2,0,1.4)+clamp((.16-toe)*3.0,0,.7);
+  const toeScore=clamp((toe-.13)*4.8,0,1.5)+clamp((footAsym-.08)*3.5,0,.7);
+  const salScore=clamp((sep-.16)*3.0,0,1.2)+clamp((.24-toe)*1.8,0,.7)+.18;
+  const ranked=[['Lo',loopScore],['T',toeScore],['S',salScore]].sort((a,b)=>b[1]-a[1]);
+  const family=ranked[0][0];
+  const margin=ranked[0][1]-ranked[1][1];
+  const code=`${r.revolutions}${family}`;
+  const sameRot=x=>`${r.revolutions}${x}`;
+  let alternatives=ranked.map(x=>sameRot(x[0]));
+  if(family==='T')alternatives=[code,sameRot('F'),sameRot('Lz'),...alternatives.filter(x=>x!==code)];
+  alternatives=[...new Set(alternatives)].slice(0,4);
+  const confidence=Math.round(clamp(43+margin*20+(m.confidence-55)*.14-r.rotationDistance*18,34,76));
+  return {code,alternatives,distance:r.rotationDistance,confidence,family};
 }
 
 function autoGOE(m,suggested){
@@ -220,9 +276,9 @@ export async function analyzeProgram(video,onProgress=()=>{}){
     const fine=await sample(video,fineTimes,pose,onProgress,62,88);
     const m=flightFromFine(fine);
     if(!m||m.rotation<.35||m.airtime<.12)continue;
-    const s=suggestJump(m.rotation);
+    const s=suggestJump(m);
     if(jumps.some(j=>Math.abs(j.time-m.time)<.75))continue;
-    jumps.push({id:crypto.randomUUID(),kind:'jump',time:m.time,code:s.code,suggestion:`${s.code}?`,goe:autoGOE(m,s.code),confidence:Math.round(clamp(m.confidence-s.distance*18,25,96)),needsConfirm:true,metrics:m});
+    jumps.push({id:crypto.randomUUID(),kind:'jump',time:m.time,code:s.code,suggestion:`${s.code}?`,alternatives:s.alternatives,goe:autoGOE(m,s.code),confidence:Math.round(clamp(s.confidence*.58+m.confidence*.42,25,94)),needsConfirm:true,metrics:m});
     onProgress(Math.round(62+26*(i+1)/Math.max(1,centers.length)));
   }
   const spins=spinCandidates(frames,jumps);
@@ -230,7 +286,7 @@ export async function analyzeProgram(video,onProgress=()=>{}){
   const pcs=componentScores(frames,elements,duration);
   const confidence=Math.round(clamp(avg(frames.map(x=>x.conf))*100-(elements.length===0?18:0)-(frames.length/times.length<.7?12:0),25,94));
   onProgress(96);
-  return {duration:round(duration,1),elements,pcs,fallCount:0,confidence,framesSeen:frames.length,version:'local-isu-v2'};
+  return {duration:round(duration,1),elements,pcs,fallCount:0,confidence,framesSeen:frames.length,version:'local-isu-v3'};
 }
 
 const isJump=code=>/^\d[TSLoFzA]/.test(code||'');
