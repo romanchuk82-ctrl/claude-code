@@ -1,4 +1,4 @@
-const CACHE='skate-v11';
+const CACHE='skate-v12';
 const ASSETS=[
   '/',
   '/manifest.webmanifest?v=6',
@@ -6,6 +6,7 @@ const ASSETS=[
   '/icons/skate-192-v6.png',
   '/icons/skate-512-v6.png',
   '/src/main-v11.js?v=11',
+  '/src/cascade-presets.js?v=12',
   '/src/style.css?v=5',
   '/src/analyzer.js?v=11',
   '/skate-family/src/analyzer.js?v=9',
