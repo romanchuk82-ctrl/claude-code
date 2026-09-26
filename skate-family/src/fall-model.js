@@ -5,6 +5,7 @@ let modelPromise=null;
 const MODEL_URL='/skate-family/models/fall_detection_transformer.tflite';
 const TF_VERSION='4.22.0';
 const TFLITE_VERSION='0.0.1-alpha.9';
+const TFLITE_DIST=`https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-tflite@${TFLITE_VERSION}/dist/`;
 
 const loadScript=src=>new Promise((resolve,reject)=>{
   const existing=[...document.scripts].find(s=>s.src===src);
@@ -20,8 +21,10 @@ async function loadRuntime(){
     await loadScript(`https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-cpu@${TF_VERSION}/dist/tf-backend-cpu.min.js`);
   }
   if(!globalThis.tflite){
-    await loadScript(`https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-tflite@${TFLITE_VERSION}/dist/tf-tflite.min.js`);
+    await loadScript(`${TFLITE_DIST}tf-tflite.min.js`);
   }
+  // Explicit path prevents iOS/PWA routing from trying to resolve the TFLite WASM binaries locally.
+  globalThis.tflite?.setWasmPath?.(TFLITE_DIST);
   if(globalThis.tf?.getBackend?.()!=='cpu')await globalThis.tf.setBackend('cpu');
   await globalThis.tf.ready();
 }
@@ -29,7 +32,7 @@ async function loadRuntime(){
 async function getModel(){
   if(!modelPromise)modelPromise=(async()=>{
     await loadRuntime();
-    return globalThis.tflite.loadTFLiteModel(MODEL_URL);
+    return globalThis.tflite.loadTFLiteModel(MODEL_URL,{numThreads:1});
   })().catch(err=>{modelPromise=null;throw err});
   return modelPromise;
 }
@@ -86,7 +89,6 @@ async function predictWindow(window){
 export async function inferFallProbability(featureFrames){
   const frames=(featureFrames||[]).filter(Boolean);
   if(frames.length<12)return {available:false,probability:null,reason:'Недостатньо кадрів після landing'};
-  // Upstream model expects 30 frames. Pad a short tail with the last valid pose.
   if(frames.length<30){const last=frames.at(-1);while(frames.length<30)frames.push(last)}
   const starts=[];
   if(frames.length===30)starts.push(0);else{
