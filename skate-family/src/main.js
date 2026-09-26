@@ -1,4 +1,3 @@
-import './style.css';
 import { analyzeVideo, estimateElement, estimateGOE } from './analyzer.js';
 import { saveAnalysis, getAnalyses } from './db.js';
 
