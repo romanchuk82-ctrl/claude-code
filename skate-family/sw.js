@@ -1,4 +1,4 @@
-const CACHE='skate-v29';
+const CACHE='skate-v30';
 const ASSETS=[
   '/',
   '/manifest.webmanifest?v=6',
