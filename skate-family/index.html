@@ -15,6 +15,12 @@
   <link rel="apple-touch-icon" sizes="180x180" href="/icons/skate-180-v6.png" />
   <link rel="apple-touch-icon-precomposed" sizes="180x180" href="/icons/skate-180-v6.png" />
   <link rel="stylesheet" href="/src/style.css?v=5" />
+  <style>
+    #modeProgram{white-space:nowrap;font-size:12px!important;padding-left:5px!important;padding-right:5px!important}
+    @media(max-width:390px){#modeSingle,#modeMulti,#modeProgram{font-size:11px!important;padding-left:4px!important;padding-right:4px!important}}
+    .program-overlay{position:fixed;inset:0;z-index:99999;background:#f5f8fa;overflow:auto;-webkit-overflow-scrolling:touch;padding-bottom:calc(30px + env(safe-area-inset-bottom))}
+    .program-shell{max-width:760px;margin:0 auto}.program-head{position:sticky;top:0;z-index:4;display:flex;align-items:center;gap:10px;padding:calc(10px + env(safe-area-inset-top)) 14px 10px;background:rgba(245,248,250,.96);backdrop-filter:blur(14px);border-bottom:1px solid #dfe8ee}.program-back{border:0;background:#fff;border-radius:12px;width:42px;height:42px;font-size:22px}.program-title{font-weight:950;font-size:18px}.program-sub{font-size:11px;color:#718797;font-weight:750}.program-pad{padding:14px}.program-video{background:#06131c;border-radius:18px;overflow:hidden}.program-video video{display:block;width:100%;max-height:42vh;background:#06131c}.program-card{background:#fff;border:1px solid #dce6ec;border-radius:18px;padding:14px;margin-top:12px;box-shadow:0 8px 26px rgba(13,47,70,.05)}.program-btn{width:100%;border:0;border-radius:14px;padding:14px 12px;font-weight:950;font-size:15px;background:#1785eb;color:#fff;margin-top:12px}.program-note{font-size:12px;line-height:1.45;color:#718797}.program-select,.program-input{width:100%;border:1px solid #d8e3ea;border-radius:11px;background:#fff;padding:9px 10px;font:inherit;font-weight:800;color:#102231}.program-summary{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}.program-stat{background:#f3f8fb;border-radius:14px;padding:12px}.program-stat .k{font-size:10px;font-weight:900;color:#718797}.program-stat .v{font-size:25px;font-weight:950;margin-top:3px}.program-total{background:#0d2a3e;color:#fff}.program-total .k,.program-total .v{color:#fff}.program-row{background:#fff;border:1px solid #dce6ec;border-radius:15px;padding:11px;margin-top:8px}.program-row.warn{border-color:#efc36b;background:#fffaf0}.program-row-top{display:grid;grid-template-columns:auto 1fr;gap:8px;align-items:center}.program-time{border:0;background:#edf5fa;color:#245775;border-radius:10px;padding:8px;font-size:11px;font-weight:900}.program-grid{display:grid;grid-template-columns:1fr 92px;gap:8px;margin-top:8px}.program-meta{font-size:10px;color:#718797;font-weight:750;margin-top:6px}.program-section{display:flex;justify-content:space-between;align-items:end;margin:18px 2px 7px}.program-section b{font-size:16px}.program-section span{font-size:11px;color:#718797;font-weight:800}.program-progress{height:9px;background:#e8f0f5;border-radius:999px;overflow:hidden;margin-top:12px}.program-progress>div{height:100%;width:0;background:#1785eb;transition:width .2s}
+  </style>
   <title>SKATE — аналіз фігурного катання</title>
 </head>
 <body>
@@ -22,6 +28,94 @@
   <script type="module" src="/src/main-v11.js?v=15"></script>
   <script type="module" src="/src/cascade-presets.js?v=21"></script>
   <script type="module" src="/src/suggestion-calibration.js?v=23"></script>
-  <script type="module" src="/src/program-ui.js?v=3"></script>
+  <script type="module">
+    const ui={program:null,type:'womenFS',judge:null,src:null};
+    const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
+    const signed=n=>Number(n)>0?`+${n}`:`${n}`;
+    const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+
+    function ensureProgramMode(){
+      const single=document.querySelector('#modeSingle');
+      const multi=document.querySelector('#modeMulti');
+      if(!single||!multi||document.querySelector('#modeProgram'))return;
+      const wrap=multi.parentElement;if(!wrap)return;
+      wrap.style.display='grid';
+      wrap.style.gridTemplateColumns='repeat(3,minmax(0,1fr))';
+      wrap.style.gap='5px';
+      single.style.fontSize='12px';
+      multi.style.fontSize='12px';
+      multi.textContent='Кілька';
+      const b=document.createElement('button');
+      b.id='modeProgram';b.type='button';b.textContent='Весь виступ';
+      b.style.cssText='border:0;padding:11px 5px;border-radius:12px;font-weight:850;background:transparent;color:#102231;box-shadow:none;';
+      multi.after(b);
+    }
+
+    function openProgram(){
+      const source=document.querySelector('#video');
+      const src=source?.currentSrc||source?.src;if(!src)return;
+      ui.src=src;ui.program=null;
+      document.querySelector('#programOverlay')?.remove();
+      document.body.insertAdjacentHTML('beforeend',`<div id="programOverlay" class="program-overlay"><div class="program-shell"><div class="program-head"><button id="programBack" class="program-back">‹</button><div><div class="program-title">Весь виступ</div><div class="program-sub">SKATE Judge · ISU-style оцінка</div></div></div><div class="program-pad"><div class="program-video"><video id="programVideo" src="${esc(src)}" playsinline controls preload="auto"></video></div><div id="programBody"></div></div></div></div>`);
+      document.body.style.overflow='hidden';
+      renderReady();
+    }
+
+    function renderReady(){
+      const root=document.querySelector('#programBody');if(!root)return;
+      root.innerHTML=`<section class="program-card"><label class="program-note">Формат програми</label><select id="programType" class="program-select" style="margin-top:7px"><option value="womenFS">Free Skating</option><option value="womenSP">Short Program</option><option value="training">Тренування</option></select><button id="runProgram" class="program-btn">Оцінити весь виступ</button><p class="program-note">SKATE пройде все відео, знайде кандидати на елементи та порахує Estimated GOE, TES, PCS і deductions.</p></section>`;
+    }
+
+    function progress(p,text='Аналізую весь виступ…'){
+      const root=document.querySelector('#programBody');if(!root)return;
+      if(!document.querySelector('#programProgress'))root.innerHTML=`<section id="programProgress" class="program-card"><b>${esc(text)}</b><div class="program-progress"><div id="programBar"></div></div><div id="programPct" class="program-note" style="margin-top:8px">0%</div></section>`;
+      const bar=document.querySelector('#programBar'),pct=document.querySelector('#programPct');if(bar)bar.style.width=`${p}%`;if(pct)pct.textContent=`${Math.round(p)}%`;
+    }
+
+    function elementOptions(value=''){
+      if(!ui.judge)return '';
+      return ui.judge.ELEMENT_OPTIONS.map(([v,t])=>`<option value="${esc(v)}" ${v===value?'selected':''}>${esc(t)}</option>`).join('');
+    }
+    function goeOptions(value=0){return [-5,-4,-3,-2,-1,0,1,2,3,4,5].map(v=>`<option value="${v}" ${Number(value)===v?'selected':''}>${signed(v)}</option>`).join('')}
+
+    function renderResults(){
+      const root=document.querySelector('#programBody');if(!root||!ui.program||!ui.judge)return;
+      const s=ui.judge.scoreProgram(ui.program,ui.type);
+      const rows=s.elements.map((x,i)=>{const src=ui.program.elements[i]||x;return `<div class="program-row ${src.needsConfirm?'warn':''}"><div class="program-row-top"><button class="program-time" data-program-seek="${src.time||0}">${ui.judge.formatTime(src.time||0)}</button><b>${src.kind==='jump'?'СТРИБОК':src.kind==='spin'?'ОБЕРТАННЯ':'ЕЛЕМЕНТ'}</b></div><div class="program-grid"><select class="program-select" data-program-element="${i}">${elementOptions(src.code||'')}</select><select class="program-select" data-program-goe="${i}">${goeOptions(src.goe)}</select></div><div class="program-meta">GOE ${signed(src.goe||0)} · BV ${x.base.toFixed(2)} → <b>${x.score.toFixed(2)}</b>${src.needsConfirm?' · підтверди тип':''}</div></div>`}).join('');
+      const p=ui.program.pcs||{composition:0,presentation:0,skatingSkills:0};
+      root.innerHTML=`<section class="program-card"><select id="programType" class="program-select"><option value="womenFS" ${ui.type==='womenFS'?'selected':''}>Free Skating</option><option value="womenSP" ${ui.type==='womenSP'?'selected':''}>Short Program</option><option value="training" ${ui.type==='training'?'selected':''}>Тренування</option></select><div class="program-summary" style="margin-top:12px"><div class="program-stat program-total"><div class="k">TOTAL</div><div class="v">${s.total.toFixed(2)}</div></div><div class="program-stat"><div class="k">TES</div><div class="v">${s.tes.toFixed(2)}</div></div><div class="program-stat"><div class="k">PCS</div><div class="v">${s.pcs.toFixed(2)}</div></div><div class="program-stat"><div class="k">DEDUCTIONS</div><div class="v">−${s.deductions.toFixed(2)}</div></div></div><p class="program-note">Якість розпізнавання: ${ui.program.confidence}% · орієнтовна оцінка, не офіційний протокол.</p></section><div class="program-section"><b>Технічний протокол</b><span>${s.elements.length} елементів</span></div>${rows||'<section class="program-card"><p class="program-note">Автоматично елементи не знайдені.</p></section>'}<div class="program-section"><b>Program Components</b><span>0.00–10.00</span></div><section class="program-card"><label class="program-note">Composition</label><input class="program-input" data-program-pcs="composition" type="number" min="0" max="10" step="0.25" value="${p.composition}"><label class="program-note" style="display:block;margin-top:10px">Presentation</label><input class="program-input" data-program-pcs="presentation" type="number" min="0" max="10" step="0.25" value="${p.presentation}"><label class="program-note" style="display:block;margin-top:10px">Skating Skills</label><input class="program-input" data-program-pcs="skatingSkills" type="number" min="0" max="10" step="0.25" value="${p.skatingSkills}"><label class="program-note" style="display:block;margin-top:10px">Падіння</label><input id="programFalls" class="program-input" type="number" min="0" max="20" step="1" value="${ui.program.fallCount||0}"></section>`;
+    }
+
+    async function runProgram(){
+      const v=document.querySelector('#programVideo');if(!v)return;
+      progress(1);
+      try{
+        ui.judge=await import('/src/programJudge.js?v=2');
+        ui.program=await ui.judge.analyzeProgram(v,p=>progress(p));
+        progress(100,'Готово');setTimeout(renderResults,100);
+      }catch(err){const root=document.querySelector('#programBody');if(root)root.innerHTML=`<section class="program-card"><b>Не вдалося завершити аналіз</b><p class="program-note">${esc(err?.message||err)}</p><button id="runProgram" class="program-btn">Спробувати ще раз</button></section>`}
+    }
+
+    document.addEventListener('click',e=>{
+      const t=e.target;
+      if(t?.id==='modeProgram'){e.preventDefault();e.stopPropagation();openProgram();return}
+      if(t?.id==='programBack'){document.querySelector('#programOverlay')?.remove();document.body.style.overflow='';return}
+      if(t?.id==='runProgram'){runProgram();return}
+      const seek=t?.closest?.('[data-program-seek]');if(seek){const v=document.querySelector('#programVideo');if(v)v.currentTime=Number(seek.dataset.programSeek)||0}
+    },true);
+
+    document.addEventListener('change',e=>{
+      const t=e.target;if(!ui.program)return;
+      if(t?.id==='programType'){ui.type=t.value;renderResults();return}
+      if(t?.dataset?.programElement!==undefined){const i=Number(t.dataset.programElement);ui.program.elements[i].code=t.value;ui.program.elements[i].needsConfirm=false;renderResults();return}
+      if(t?.dataset?.programGoe!==undefined){const i=Number(t.dataset.programGoe);ui.program.elements[i].goe=clamp(Number(t.value)||0,-5,5);renderResults();return}
+      if(t?.dataset?.programPcs){ui.program.pcs[t.dataset.programPcs]=clamp(Number(t.value)||0,0,10);renderResults();return}
+      if(t?.id==='programFalls'){ui.program.fallCount=clamp(Math.round(Number(t.value)||0),0,20);renderResults()}
+    },true);
+
+    new MutationObserver(ensureProgramMode).observe(document.querySelector('#app')||document.body,{subtree:true,childList:true});
+    setInterval(ensureProgramMode,500);
+    ensureProgramMode();
+  </script>
 </body>
 </html>
