@@ -10,8 +10,8 @@ const smooth=(a,w=1)=>a.map((_,i)=>avg(a.slice(Math.max(0,i-w),Math.min(a.length
 
 async function loadVision(){
   const sources=[
-    `${MP_CDN}/vision_bundle.mjs?skate=16`,
-    `https://unpkg.com/@mediapipe/tasks-vision@${MP_VERSION}/vision_bundle.mjs?skate=16`
+    `${MP_CDN}/vision_bundle.mjs?skate=17`,
+    `https://unpkg.com/@mediapipe/tasks-vision@${MP_VERSION}/vision_bundle.mjs?skate=17`
   ];
   let last;
   for(const src of sources){
@@ -24,7 +24,7 @@ async function makePose(){
   if(!FilesetResolver){const m=await loadVision();FilesetResolver=m.FilesetResolver;PoseLandmarker=m.PoseLandmarker}
   const vision=await FilesetResolver.forVisionTasks(`${MP_CDN}/wasm`);
   const model='https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task';
-  const opts={baseOptions:{modelAssetPath:model,delegate:'GPU'},runningMode:'VIDEO',numPoses:1,minPoseDetectionConfidence:.40,minPosePresenceConfidence:.40,minTrackingConfidence:.40};
+  const opts={baseOptions:{modelAssetPath:model,delegate:'GPU'},runningMode:'VIDEO',numPoses:1,minPoseDetectionConfidence:.38,minPosePresenceConfidence:.38,minTrackingConfidence:.38};
   try{return await PoseLandmarker.createFromOptions(vision,opts)}catch{return await PoseLandmarker.createFromOptions(vision,{...opts,baseOptions:{modelAssetPath:model}})}
 }
 
@@ -57,7 +57,7 @@ function frameMetrics(res){
   return {hipY:hp.y,supportAnkleY,ankleSpread,body,conf};
 }
 
-function chooseSeparated(candidates,minGap=.46,maxCount=8){
+function chooseSeparated(candidates,minGap=.40,maxCount=8){
   const picked=[];
   for(const c of [...candidates].sort((a,b)=>b.score-a.score)){
     if(picked.every(x=>Math.abs(x.time-c.time)>=minGap))picked.push(c);
@@ -71,19 +71,26 @@ function suppressMiddleFalsePositives(candidates){
   const sorted=[...candidates].sort((a,b)=>a.time-b.time),keep=[];
   for(let i=0;i<sorted.length;i++){
     const c=sorted[i],p=sorted[i-1],n=sorted[i+1];
-    const betweenStrong=p&&n&&(c.time-p.time)<1.15&&(n.time-c.time)<1.15;
-    const muchWeaker=betweenStrong&&c.score<Math.min(p.score,n.score)*.72&&c.support<Math.min(p.support,n.support)*.86;
+    const betweenStrong=p&&n&&(c.time-p.time)<1.05&&(n.time-c.time)<1.05;
+    const muchWeaker=betweenStrong&&c.score<Math.min(p.score,n.score)*.66&&c.support<Math.min(p.support,n.support)*.80;
     if(!muchWeaker)keep.push(c);
   }
   return keep;
 }
 
-function addBestNearby(base,pool,{minGap=.28,maxGap=1.65,maxCount=3}={}){
+function addBest(base,pool,{minGap=.24,maxGap=Infinity,maxCount=3,preferAfter=false}={}){
   const merged=[...base];
-  const ranked=[...pool].sort((a,b)=>b.score-a.score);
+  const anchor=base[0]?.time??null;
+  const ranked=[...pool].sort((a,b)=>{
+    if(preferAfter&&anchor!=null){
+      const aa=a.time>anchor?0:1,bb=b.time>anchor?0:1;
+      if(aa!==bb)return aa-bb;
+    }
+    return b.score-a.score;
+  });
   for(const c of ranked){
     if(merged.some(x=>Math.abs(x.time-c.time)<minGap))continue;
-    if(merged.length&& !merged.some(x=>{const d=Math.abs(x.time-c.time);return d>=minGap&&d<=maxGap}))continue;
+    if(merged.length&&Number.isFinite(maxGap)&&!merged.some(x=>Math.abs(x.time-c.time)<=maxGap))continue;
     merged.push(c);
     if(merged.length>=maxCount)break;
   }
@@ -96,18 +103,18 @@ export async function detectJumpCandidates(video,{expectedCount=null,seriesMode=
   try{
     const duration=Math.min(video.duration||0,30);
     if(duration<1)throw new Error('Відео занадто коротке');
-    const step=duration<=8?.05:duration<=16?.065:.08;
+    const step=duration<=8?.045:duration<=16?.06:.075;
     const times=[];for(let t=0;t<duration-.001;t+=step)times.push(t);if(times.at(-1)<duration-.08)times.push(Math.max(0,duration-.002));
     const raw=[];let lastTs=-1;
     for(let i=0;i<times.length;i++){
       const t=times[i];await seek(video,t);let ts=Math.round(t*1000);if(ts<=lastTs)ts=lastTs+1;lastTs=ts;
-      const m=frameMetrics(pose.detectForVideo(video,ts));if(m&&m.conf>.30)raw.push({t,...m});
+      const m=frameMetrics(pose.detectForVideo(video,ts));if(m&&m.conf>.27)raw.push({t,...m});
       onProgress(Math.round((i+1)/times.length*80));
     }
     if(raw.length<12)throw new Error('Не вдалося стабільно побачити фігуриста');
 
     const hip=smooth(raw.map(s=>s.hipY),1),foot=smooth(raw.map(s=>s.supportAnkleY),1),body=raw.map(s=>s.body);
-    const half=Math.max(6,Math.round(.68/step));
+    const half=Math.max(6,Math.round(.64/step));
     const hipLift=[],footLift=[],combined=[],spreadNorm=[];
     for(let i=0;i<raw.length;i++){
       const lo=Math.max(0,i-half),hi=Math.min(raw.length,i+half+1),localBody=median(body.slice(lo,hi))||body[i]||.25;
@@ -115,68 +122,70 @@ export async function detectJumpCandidates(video,{expectedCount=null,seriesMode=
       const f=(median(foot.slice(lo,hi))-foot[i])/Math.max(.08,localBody);
       const sp=raw[i].ankleSpread/Math.max(.08,localBody);
       hipLift.push(h);footLift.push(f);spreadNorm.push(sp);
-      combined.push(h*.80+f*.20-Math.max(0,sp-.46)*.008);
+      combined.push(h*.82+f*.18-Math.max(0,sp-.50)*.006);
     }
-    const s=smooth(combined,1),noise=Math.max(.0032,mad(s));
-    const primary=Math.max(.022,noise*2.40),secondary=Math.max(.0115,noise*1.52);
+    const s=smooth(combined,1),noise=Math.max(.003,mad(s));
+    const primary=Math.max(.020,noise*2.25),secondary=Math.max(.0085,noise*1.25);
 
     const collect=(threshold,relaxed=false)=>{
       const out=[];
       for(let i=2;i<s.length-2;i++){
         if(s[i]<threshold||s[i]<s[i-1]||s[i]<s[i+1]||s[i]<s[i-2]||s[i]<s[i+2])continue;
-        const edge=Math.max(.0045,s[i]*(relaxed?.17:.21));
+        const edge=Math.max(.0038,s[i]*(relaxed?.14:.20));
         let a=i,b=i;while(a>0&&s[a]>edge)a--;while(b<s.length-1&&s[b]>edge)b++;
         const air=raw[b].t-raw[a].t;
-        if(air<(relaxed?.085:.105)||air>.92)continue;
-        const conf=avg(raw.slice(a,b+1).map(x=>x.conf));if(conf<(relaxed?.34:.38))continue;
+        if(air<(relaxed?.07:.10)||air>.95)continue;
+        const conf=avg(raw.slice(a,b+1).map(x=>x.conf));if(conf<(relaxed?.29:.36))continue;
         const hPeak=Math.max(...hipLift.slice(Math.max(0,a),Math.min(hipLift.length,b+1)));
         const fPeak=Math.max(...footLift.slice(Math.max(0,a),Math.min(footLift.length,b+1)));
         const freeLeg=median(spreadNorm.slice(Math.max(0,a),Math.min(spreadNorm.length,b+1)));
-        if(hPeak<(relaxed?.0075:.0125))continue;
-        if(fPeak<(relaxed?-.015:-.006))continue;
-        if(freeLeg>(relaxed?.78:.62)&&fPeak<(relaxed?.002:.010))continue;
+        if(hPeak<(relaxed?.0045:.011))continue;
+        if(fPeak<(relaxed?-.024:-.008))continue;
+        if(freeLeg>(relaxed?.90:.68)&&fPeak<(relaxed?-.003:.008))continue;
         const prominence=s[i]-Math.max(s[Math.max(0,a)],s[Math.min(s.length-1,b)]);
-        const support=clamp(.16+hPeak*8.8+Math.max(0,fPeak)*5.0+prominence*4.8+conf*.18-Math.max(0,freeLeg-.48)*.10,0,1);
-        const score=s[i]*110+prominence*44+clamp(air,.11,.62)*7+conf*4+support*8;
-        const confidence=Math.round(clamp(28+support*52+Math.min(16,prominence/Math.max(noise,.001)*3)-Math.max(0,freeLeg-.62)*15,18,97));
+        const support=clamp(.13+hPeak*9.2+Math.max(0,fPeak)*4.5+prominence*5.0+conf*.18-Math.max(0,freeLeg-.52)*.08,0,1);
+        const score=s[i]*112+prominence*46+clamp(air,.09,.62)*7+conf*4+support*8;
+        const confidence=Math.round(clamp(24+support*54+Math.min(17,prominence/Math.max(noise,.001)*3)-Math.max(0,freeLeg-.70)*12,15,97));
         out.push({time:raw[i].t,airtime:air,lift:s[i],score,support,confidence,hipLift:hPeak,footLift:fPeak,freeLeg,relaxed});
       }
       return out;
     };
 
-    const primaryPool=collect(primary,false).filter(c=>c.support>=.34);
-    const secondaryPool=collect(secondary,true).filter(c=>c.support>=.20&&c.confidence>=32);
-    let candidates=suppressMiddleFalsePositives(chooseSeparated(primaryPool,.42,10));
+    const primaryPool=collect(primary,false).filter(c=>c.support>=.30);
+    const secondaryPool=collect(secondary,true).filter(c=>c.support>=.13&&c.confidence>=24);
+    let candidates=suppressMiddleFalsePositives(chooseSeparated(primaryPool,.38,10));
 
     if(expectedCount&&candidates.length<expectedCount){
-      const merged=addBestNearby(candidates,secondaryPool,{minGap:.25,maxGap:1.85,maxCount:expectedCount});
-      candidates=suppressMiddleFalsePositives(chooseSeparated(merged,.31,expectedCount));
+      candidates=addBest(candidates,secondaryPool,{minGap:.22,maxGap:3.2,maxCount:expectedCount,preferAfter:true});
+      candidates=chooseSeparated(candidates,.26,expectedCount);
     }
 
-    // In “Кілька стрибків” mode the user has already told us there is a series.
-    // If only one strong jump is found, look once more for a weaker adjacent take-off
-    // instead of silently returning a single jump.
-    if(!expectedCount&&seriesMode&&candidates.length===1){
-      const nearby=secondaryPool.filter(c=>{
-        const d=Math.abs(c.time-candidates[0].time);
-        return d>=.24&&d<=1.55&&c.support>=.20&&c.confidence>=32;
-      });
-      const merged=addBestNearby(candidates,nearby,{minGap:.24,maxGap:1.55,maxCount:2});
-      candidates=chooseSeparated(merged,.28,2);
-    }
-
-    if(!expectedCount&&seriesMode&&candidates.length===0&&secondaryPool.length){
-      candidates=chooseSeparated(secondaryPool,.30,3);
-    }
-
-    if(expectedCount&&candidates.length>expectedCount){
-      candidates=chooseSeparated(candidates,.31,expectedCount);
+    if(!expectedCount&&seriesMode){
+      if(candidates.length===0&&secondaryPool.length){
+        candidates=chooseSeparated(secondaryPool,.26,4);
+      }
+      if(candidates.length===1){
+        // Multi-jump mode explicitly means there is more than one element. Search the
+        // whole remaining clip for the strongest second take-off instead of requiring
+        // it to be within 1.5 s of the first. This fixes cascades with a long setup or
+        // a fall after the second jump.
+        const anchor=candidates[0];
+        const secondPool=secondaryPool.filter(c=>Math.abs(c.time-anchor.time)>=.22&&Math.abs(c.time-anchor.time)<=3.5);
+        candidates=addBest(candidates,secondPool,{minGap:.22,maxGap:3.5,maxCount:2,preferAfter:true});
+      }
+      if(candidates.length>1){
+        const top=Math.max(...candidates.map(c=>c.score));
+        candidates=candidates.filter(c=>c.score>=top*.11&&c.confidence>=22);
+        candidates=chooseSeparated(candidates,.25,4);
+        candidates=suppressMiddleFalsePositives(candidates);
+      }
     }else if(!expectedCount&&candidates.length>1){
       const top=Math.max(...candidates.map(c=>c.score));
-      const floor=seriesMode?.22:.34;
-      candidates=candidates.filter(c=>c.score>=top*floor&&c.confidence>=(seriesMode?32:45));
+      candidates=candidates.filter(c=>c.score>=top*.32&&c.confidence>=42);
       candidates=suppressMiddleFalsePositives(candidates);
     }
+
+    if(expectedCount&&candidates.length>expectedCount)candidates=chooseSeparated(candidates,.26,expectedCount);
 
     onProgress(100);
     return candidates.map(c=>({
