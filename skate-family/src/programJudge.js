@@ -179,7 +179,7 @@ function spinCandidates(frames,jumps){
     const rotations=yawRotation(seg);
     if(dur<1.0||rotations<1.5)continue;
     if(std(seg.map(x=>x.hipX))>.09||std(seg.map(x=>x.hipY))>.07)continue;
-    out.push({id:crypto.randomUUID(),kind:'spin',time:round((seg[0].t+seg.at(-1].t)/2,2),code:'',suggestion:'Spin?',goe:0,confidence:Math.round(clamp(avg(seg.map(x=>x.conf))*80+rotations*3,35,88)),metrics:{rotations:round(rotations,1),duration:round(dur,1)}});
+    out.push({id:crypto.randomUUID(),kind:'spin',time:round((seg[0].t+seg.at(-1).t)/2,2),code:'',suggestion:'Spin?',goe:0,confidence:Math.round(clamp(avg(seg.map(x=>x.conf))*80+rotations*3,35,88)),metrics:{rotations:round(rotations,1),duration:round(dur,1)}});
   }
   const dedup=[];for(const x of out){if(dedup.every(y=>Math.abs(y.time-x.time)>2.5))dedup.push(x)}
   return dedup.slice(0,4);
