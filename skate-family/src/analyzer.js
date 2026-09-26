@@ -24,6 +24,12 @@ async function loadVisionModule(){
   throw new Error('Не вдалося завантажити модуль аналізу. Перевір інтернет і спробуй ще раз.');
 }
 
+function resetPose(){
+  if(!landmarker)return;
+  try{landmarker.close?.()}catch(err){console.warn('PoseLandmarker close failed',err)}
+  landmarker=null;
+}
+
 export async function initPose(){
   if(landmarker) return landmarker;
   if(!FilesetResolver){
@@ -83,19 +89,30 @@ function detectFlight(samples){
 }
 
 export async function analyzeVideo(video,onProgress=()=>{}){
+  // MediaPipe VIDEO mode requires timestamps to be strictly increasing for one graph instance.
+  // Every newly selected video starts again at t=0, so create a fresh graph for every analysis.
+  resetPose();
   const pose=await initPose();
   const duration=Math.min(video.duration||0,15);
   if(!duration||duration<.4)throw new Error('Відео занадто коротке');
   const step=duration<=6?.06:duration<=10?.08:.1;
   const times=[]; for(let t=0;t<=duration;t+=step)times.push(Math.min(t,duration-.001));
   const raw=[];
-  for(let i=0;i<times.length;i++){
-    const t=times[i];
-    await seek(video,t);
-    const res=pose.detectForVideo(video,Math.round(t*1000));
-    const m=getMetrics(res);
-    if(m)raw.push({t,...m});
-    onProgress(Math.round((i+1)/times.length*88));
+  try{
+    for(let i=0;i<times.length;i++){
+      const t=times[i];
+      await seek(video,t);
+      const res=pose.detectForVideo(video,Math.round(t*1000));
+      const m=getMetrics(res);
+      if(m)raw.push({t,...m});
+      onProgress(Math.round((i+1)/times.length*88));
+    }
+  }catch(err){
+    if(/timestamp mismatch|monotonically increasing/i.test(String(err?.message||err))){
+      resetPose();
+      throw new Error('Модуль аналізу було перезапущено. Натисни «Аналізувати відео» ще раз.');
+    }
+    throw err;
   }
   if(raw.length<8)throw new Error('Не вдалося стабільно побачити фігуру. Спробуй відео, де все тіло в кадрі.');
   const flight=detectFlight(raw);
