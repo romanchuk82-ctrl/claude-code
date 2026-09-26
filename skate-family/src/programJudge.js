@@ -8,6 +8,7 @@ const median=a=>{if(!a.length)return 0;const b=[...a].sort((x,y)=>x-y);return b[
 const round=(v,n=2)=>{const p=10**n;return Math.round(v*p)/p};
 const deg=r=>r*180/Math.PI;
 const angleDiff=(a,b)=>{let d=a-b;while(d>Math.PI)d-=Math.PI*2;while(d<-Math.PI)d+=Math.PI*2;return d};
+let detectionClock=0;
 
 export const PROGRAM_TYPES={
   training:{label:'Тренування · без ISU factor',factor:1,bonusCount:0},
@@ -76,7 +77,8 @@ async function sample(video,times,pose,onProgress,startP,endP){
   for(let i=0;i<times.length;i++){
     const t=times[i];
     await seek(video,t);
-    const r=pose.detectForVideo(video,Math.round(t*1000));
+    detectionClock+=40;
+    const r=pose.detectForVideo(video,detectionClock);
     const m=frameMetrics(r,t);
     if(m)out.push(m);
     onProgress(Math.round(startP+(endP-startP)*(i+1)/times.length));
@@ -202,6 +204,7 @@ function componentScores(frames,elements,duration){
 }
 
 export async function analyzeProgram(video,onProgress=()=>{}){
+  detectionClock=0;
   const pose=await initPose();
   const duration=Math.min(video.duration||0,330);
   if(!duration||duration<8)throw new Error('Для оцінки виступу потрібне відео довше 8 секунд');
