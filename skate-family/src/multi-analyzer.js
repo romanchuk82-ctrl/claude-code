@@ -1,3 +1,5 @@
+import { makeFallFeatures, inferFallProbability } from './fall-model.js?v=14';
+
 let FilesetResolver, PoseLandmarker;
 let pose=null;
 let lastTimestamp=-1;
@@ -20,7 +22,7 @@ const linRegResidual=(times,values)=>{if(values.length<2)return values.map(()=>0
 const angle2d=(a,b,c)=>{const ab=[a.x-b.x,a.y-b.y],cb=[c.x-b.x,c.y-b.y];const dot=ab[0]*cb[0]+ab[1]*cb[1];const den=Math.hypot(...ab)*Math.hypot(...cb)||1;return deg(Math.acos(clamp(dot/den,-1,1)))};
 
 async function loadVisionModule(){
-  const sources=[`${MP_CDN}/vision_bundle.mjs?skate=11`,`https://unpkg.com/@mediapipe/tasks-vision@${MP_VERSION}/vision_bundle.mjs?skate=11`];
+  const sources=[`${MP_CDN}/vision_bundle.mjs?skate=14`,`https://unpkg.com/@mediapipe/tasks-vision@${MP_VERSION}/vision_bundle.mjs?skate=14`];
   let lastError;
   for(const source of sources){
     try{const mod=await import(source);if(mod?.FilesetResolver&&mod?.PoseLandmarker)return mod}catch(err){lastError=err}
@@ -58,7 +60,7 @@ function getMetrics(frame){
   const yawAgreement=Math.abs(wrapAngle(shoulderYaw-hipYaw));
   const kneeAngle=(angle2d(l[23],l[25],l[27])+angle2d(l[24],l[26],l[28]))/2;
   const conf=avg([11,12,23,24,25,26,27,28].map(i=>l[i].visibility??0));
-  return {hipX:hp.x,hipY:hp.y,ankleY:an.y,bodyHeight,torsoAxis,shoulderYaw,hipYaw,yaw,yawAgreement,kneeAngle,conf};
+  return {hipX:hp.x,hipY:hp.y,ankleY:an.y,bodyHeight,torsoAxis,shoulderYaw,hipYaw,yaw,yawAgreement,kneeAngle,conf,fallFeatures:makeFallFeatures(l)};
 }
 
 function detectFlight(samples){
@@ -112,11 +114,17 @@ export async function analyzeVideoRange(video,start,end,onProgress=()=>{}){
   const raw=[];
   for(let i=0;i<times.length;i++){
     const t=times[i];await seek(video,t);let ts=Math.round(t*1000);if(ts<=lastTimestamp)ts=lastTimestamp+1;lastTimestamp=ts;
-    const r=p.detectForVideo(video,ts),m=getMetrics(r);if(m)raw.push({t,...m});onProgress(Math.round((i+1)/times.length*82));
+    const r=p.detectForVideo(video,ts),m=getMetrics(r);if(m)raw.push({t,...m});onProgress(Math.round((i+1)/times.length*76));
   }
   if(raw.length<9)throw new Error('Не вдалося стабільно побачити цей стрибок. Пересунь мітку ближче до моменту відриву.');
   const coverage=raw.length/times.length,flight=detectFlight(raw),phase=scorePhases(raw,flight),rot=scoreRotation(raw,flight),height=G*flight.airtime*flight.airtime/8,poseConfidence=avg(raw.map(s=>s.conf))*100;
+  const post=raw.slice(flight.end),landingHip=raw[flight.end]?.hipY??0,postTorsoMax=post.length?Math.max(...post.map(s=>s.torsoAxis)):0,hipDropBodies=post.length?Math.max(0,...post.map(s=>(s.hipY-landingHip)/Math.max(.08,flight.body))):0;
+  onProgress(80);
+  const fallML=await inferFallProbability(raw.slice(Math.max(0,flight.start-5)).map(s=>s.fallFeatures));
+  const fallGeometry=postTorsoMax>=48||hipDropBodies>=.22||phase.landingStability<=31;
+  const fallDetected=!!(fallML.available&&fallML.probability>=.90&&fallGeometry);
+  const fallPossible=!fallDetected&&((fallML.available&&fallML.probability>=.78&&fallGeometry)||(postTorsoMax>=62&&hipDropBodies>=.28));
   const confidence=Math.min(76,clamp(poseConfidence*.46+coverage*100*.18+flight.phaseConfidence*.20+rot.rotationConfidence*.16,20,98));
-  const metrics={version:3,airtime:round(flight.airtime,2),height:round(height,2),rotation:round(rot.rotation,2),rotationConfidence:Math.round(rot.rotationConfidence),lengthBodies:round(phase.lengthBodies,2),flow:Math.round(phase.flow),flowRatio:phase.flowRatio==null?null:round(phase.flowRatio,2),takeoffQuality:Math.round(phase.takeoffQuality),landingStability:Math.round(phase.landingStability),stability:Math.round(phase.landingStability),bodyControl:Math.round(phase.bodyControl),smoothness:Math.round(phase.smoothness),axis:round(phase.airAxis,1),axisVariation:round(phase.airAxisVar,1),landingKnee:round(phase.landingKnee,0),confidence:Math.round(confidence),phaseConfidence:Math.round(flight.phaseConfidence),poseConfidence:Math.round(poseConfidence),coverage:Math.round(coverage*100),takeoff:round(raw[flight.start].t,2),landing:round(raw[flight.end].t,2)};
+  const metrics={version:4,airtime:round(flight.airtime,2),height:round(height,2),rotation:round(rot.rotation,2),rotationConfidence:Math.round(rot.rotationConfidence),lengthBodies:round(phase.lengthBodies,2),flow:Math.round(phase.flow),flowRatio:phase.flowRatio==null?null:round(phase.flowRatio,2),takeoffQuality:Math.round(phase.takeoffQuality),landingStability:Math.round(phase.landingStability),stability:Math.round(phase.landingStability),bodyControl:Math.round(phase.bodyControl),smoothness:Math.round(phase.smoothness),axis:round(phase.airAxis,1),axisVariation:round(phase.airAxisVar,1),landingKnee:round(phase.landingKnee,0),confidence:Math.round(confidence),phaseConfidence:Math.round(flight.phaseConfidence),poseConfidence:Math.round(poseConfidence),coverage:Math.round(coverage*100),takeoff:round(raw[flight.start].t,2),landing:round(raw[flight.end].t,2),fallDetected,fallPossible,fallProbability:fallML.probability==null?null:round(fallML.probability,3),fallModelAvailable:fallML.available,fallGeometry,postTorsoMax:round(postTorsoMax,1),hipDropBodies:round(hipDropBodies,2)};
   metrics.quality=qualityScore(metrics);onProgress(100);return metrics;
 }
