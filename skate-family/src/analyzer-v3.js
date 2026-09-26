@@ -1,4 +1,4 @@
-import { analyzeVideo as baseAnalyzeVideo, estimateElement as baseEstimateElement } from './analyzer.js?v=9';
+import { analyzeVideo as baseAnalyzeVideo, estimateElement as baseEstimateElement } from '/skate-family/src/analyzer.js?v=9';
 
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
 const round=(v,n=2)=>{const p=10**n;return Math.round(v*p)/p};
@@ -12,8 +12,6 @@ const EXPECTED={
 
 export async function analyzeVideo(video,onProgress=()=>{}){
   const metrics=await baseAnalyzeVideo(video,onProgress);
-  // Pose/phase tracking can be excellent while GOE certainty is still limited by a single camera.
-  // Keep the original tracking confidence for diagnostics, but do not present it as judge-level certainty.
   return {
     ...metrics,
     version:3,
@@ -40,8 +38,6 @@ export function estimateGOE(metrics,element,flags={}){
   const reductions=[];
   const target=heightLengthTarget(expected);
 
-  // ISU-style positive criterion 1: height + length. Use tolerant thresholds because
-  // image-plane distance is perspective-dependent on a phone camera.
   const strongHeight=metrics.height>=target.h;
   const enoughLength=metrics.lengthBodies>=target.l*.85;
   const strongLength=metrics.lengthBodies>=target.l;
@@ -55,8 +51,6 @@ export function estimateGOE(metrics,element,flags={}){
     reasons.push(['neu','Висота або довжина скромні; не штрафую автоматично через перспективу камери']);
   }
 
-  // Do not punish a normal skating lean. The v2 absolute torso-angle thresholds were too harsh.
-  // Only award a positive bullet when the phase metrics are clearly strong.
   if(metrics.takeoffQuality>=64&&metrics.landingStability>=68){
     positives.push('takeoffLanding');
     reasons.push(['pos','Контрольований take-off і landing']);
@@ -84,9 +78,6 @@ export function estimateGOE(metrics,element,flags={}){
     reasons.push(['neu','Pose-модель бачить нестабільність корпусу, але не штрафую без явної помилки']);
   }
 
-  // IMPORTANT: MediaPipe world-landmark yaw is not a reliable revolution counter for fast spins.
-  // It can report e.g. ~1.3 turns for a clean 2S while tracking confidence is high. Therefore q/<</
-  // must not be inferred from this value. Keep it diagnostic only until we add silhouette/optical-flow rotation.
   const deficit=expected-(metrics.rotation||0);
   let rotationCall='uncertain';
   if(manual){
@@ -95,14 +86,13 @@ export function estimateGOE(metrics,element,flags={}){
     reasons.push(['neu','Авто-rotation є орієнтовним і не використовується для технічного штрафу']);
   }
 
-  // Hard deductions are applied only to events confirmed by the user/video review.
   if(flags.hand){reductions.push(1);reasons.push(['neg','Дотик рукою підтверджено'])}
   if(flags.twoFoot){reductions.push(2);reasons.push(['neg','Landing на дві ноги підтверджено'])}
   if(flags.stepOut){reductions.push(3);reasons.push(['neg','Step-out підтверджено'])}
   if(flags.fall){reductions.push(5);reasons.push(['neg','Fall підтверджено'])}
 
   let goe=positives.length-reductions.reduce((a,b)=>a+b,0);
-  goe=clamp(Math.round(goe),-5,3); // single camera cannot justify +4/+5 reliably
+  goe=clamp(Math.round(goe),-5,3);
 
   const effectiveConfidence=Math.min(metrics.confidence??60,manual?76:66);
   const rangePad=effectiveConfidence>=72?1:2;
