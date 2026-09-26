@@ -1,13 +1,13 @@
-const CACHE='skate-v8';
+const CACHE='skate-v9';
 const ASSETS=[
   '/',
   '/manifest.webmanifest?v=6',
   '/icons/skate-180-v6.png',
   '/icons/skate-192-v6.png',
   '/icons/skate-512-v6.png',
-  '/src/main.js?v=5',
+  '/src/main.js?v=9',
   '/src/style.css?v=5',
-  '/src/analyzer.js',
+  '/src/analyzer.js?v=9',
   '/src/db.js'
 ];
 
@@ -25,8 +25,7 @@ self.addEventListener('fetch',e=>{
   if(e.request.method!=='GET')return;
   const url=new URL(e.request.url);
 
-  // Do not proxy/cache cross-origin MediaPipe, model or CDN requests.
-  // Safari module loading is much more reliable when these requests go directly to the network.
+  // Keep cross-origin MediaPipe/model/CDN traffic outside the PWA cache.
   if(url.origin!==self.location.origin)return;
 
   if(e.request.mode==='navigate'){
