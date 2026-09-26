@@ -1,4 +1,4 @@
-const CACHE='skate-v23';
+const CACHE='skate-v24';
 const ASSETS=[
   '/',
   '/manifest.webmanifest?v=6',
@@ -8,6 +8,8 @@ const ASSETS=[
   '/src/main-v11.js?v=15',
   '/src/cascade-presets.js?v=21',
   '/src/suggestion-calibration.js?v=23',
+  '/src/program-ui.js?v=1',
+  '/src/programJudge.js?v=1',
   '/src/jump-detector.js?v=18',
   '/src/style.css?v=5',
   '/src/analyzer.js?v=14',
