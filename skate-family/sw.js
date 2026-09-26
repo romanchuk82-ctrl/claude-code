@@ -1,18 +1,18 @@
-const CACHE='skate-v14';
+const CACHE='skate-v15';
 const ASSETS=[
   '/',
   '/manifest.webmanifest?v=6',
   '/icons/skate-180-v6.png',
   '/icons/skate-192-v6.png',
   '/icons/skate-512-v6.png',
-  '/src/main-v11.js?v=14',
-  '/src/cascade-presets.js?v=14',
-  '/src/jump-detector.js?v=13',
+  '/src/main-v11.js?v=15',
+  '/src/cascade-presets.js?v=15',
+  '/src/jump-detector.js?v=15',
   '/src/style.css?v=5',
   '/src/analyzer.js?v=14',
   '/skate-family/src/analyzer.js?v=9',
-  '/src/multi-analyzer.js?v=14',
-  '/src/fall-model.js?v=14',
+  '/src/multi-analyzer.js?v=15',
+  '/src/fall-model.js?v=15',
   '/src/cascade-score.js?v=14',
   '/skate-family/models/fall_detection_transformer.tflite',
   '/src/db.js'
