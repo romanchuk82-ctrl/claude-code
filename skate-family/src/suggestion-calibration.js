@@ -1,38 +1,63 @@
 let scheduled=false;
+let autoSession=false;
+let sessionMode='';
+let sessionTimer=null;
+let calibratedFirst=false;
+const pending=new Map();
 
 function setStatus(text){
   const node=document.querySelector('#autoFindStatus');
   if(node&&node.textContent!==text)node.textContent=text;
 }
 
-function calibrateFirstJump(){
-  const preset=document.querySelector('#cascadePreset');
+function markerIndex(node){
+  const raw=node?.dataset?.i;
+  if(raw!==undefined&&raw!=='')return Number(raw);
+  return [...document.querySelectorAll('.markerElement')].indexOf(node);
+}
+
+function autoOrCountMode(){
+  const value=String(sessionMode||document.querySelector('#cascadePreset')?.value||'');
+  return !value||value.startsWith('count:');
+}
+
+function startAutoSession(){
+  autoSession=true;
+  calibratedFirst=false;
+  pending.clear();
+  sessionMode=String(document.querySelector('#cascadePreset')?.value||'');
+  if(sessionTimer)clearTimeout(sessionTimer);
+  sessionTimer=setTimeout(()=>{autoSession=false},90000);
+}
+
+function remember(node,index){
+  pending.set(index,{
+    value:String(node.value||''),
+    learned:node.dataset.skateLearned==='1'
+  });
+}
+
+function rehydrateSuggestionState(){
   const selects=[...document.querySelectorAll('.markerElement')];
-  if(!preset||selects.length<2)return;
+  selects.forEach((select,index)=>{
+    const saved=pending.get(index);
+    if(!saved||select.value!==saved.value)return;
+    select.dataset.skateSuggested='1';
+    select.dataset.skateOriginal=saved.value;
+    select.dataset.skateLearned=saved.learned?'1':'0';
+  });
+}
 
-  // Only calibrate SKATE's own automatic suggestion. A user choice or a learned
-  // correction must always win and must never be changed behind the user's back.
-  const first=selects[0];
-  if(first.dataset.skateSuggested!=='1'||first.dataset.skateLearned==='1')return;
-  if(preset.value&& !String(preset.value).startsWith('count:'))return;
-
-  const match=String(first.value||'').match(/^(\d)T$/);
-  if(!match)return;
-
-  // With one phone camera, ankle lift is not a reliable toe-pick detector: a Salchow
-  // free-leg swing can create the same pose signal. Therefore an unlearned first-jump
-  // Toe Loop guess is treated as an ambiguous edge/toe case and defaults to Salchow.
-  // If this is really a Toe Loop, changing it once teaches the local correction model.
-  const corrected=`${match[1]}S`;
-  if(![...first.options].some(o=>o.value===corrected))return;
-
-  first.value=corrected;
-  first.dataset.skateOriginal=corrected;
-  first.dataset.skateSuggested='1';
-  first.dispatchEvent(new Event('change',{bubbles:true}));
-
+function finishCalibrationNote(){
+  if(!calibratedFirst)return;
+  const selects=[...document.querySelectorAll('.markerElement')];
+  if(selects.length<2)return;
   const label=selects.map(s=>s.value).join(' + ');
-  setStatus(`SKATE пропонує: ${label}. Перший стрибок визначено обережно як Salchow, бо з одного ракурсу toe-pick ненадійний. Якщо це Toe Loop — просто зміни список, і SKATE запам'ятає виправлення.`);
+  const node=document.querySelector('#autoFindStatus');
+  if(!node)return;
+  const current=String(node.textContent||'');
+  if(current.includes('Запам')||current.includes('Виправлення'))return;
+  setStatus(`SKATE пропонує: ${label}. Перший стрибок у неоднозначній парі Salchow / Toe Loop обрано обережно як Salchow. Якщо це Toe Loop — зміни тип вручну, SKATE запам'ятає виправлення.`);
 }
 
 function schedule(){
@@ -40,16 +65,44 @@ function schedule(){
   scheduled=true;
   requestAnimationFrame(()=>{
     scheduled=false;
-    calibrateFirstJump();
+    rehydrateSuggestionState();
+    if(calibratedFirst)setTimeout(finishCalibrationNote,80);
   });
 }
 
+// The automatic cascade module writes the proposed value and then dispatches a
+// change event. main-v11 re-renders the marker list on that same event, so any
+// correction done after the render is too late. Intercept the event in capture
+// phase and calibrate the value BEFORE the app stores it in state.
 document.addEventListener('change',e=>{
-  if(e.target?.classList?.contains('markerElement'))schedule();
+  const target=e.target;
+  if(!target?.classList?.contains('markerElement'))return;
+  const index=markerIndex(target);
+  if(index<0)return;
+
+  const suggested=target.dataset.skateSuggested==='1';
+  const learned=target.dataset.skateLearned==='1';
+
+  if(autoSession&&suggested&&index===0&&!learned&&autoOrCountMode()){
+    const match=String(target.value||'').match(/^(\d)T$/);
+    if(match){
+      const corrected=`${match[1]}S`;
+      if([...target.options].some(o=>o.value===corrected)){
+        target.value=corrected;
+        target.dataset.skateOriginal=corrected;
+        calibratedFirst=true;
+      }
+    }
+  }
+
+  if(suggested||autoSession)remember(target,index);
+  schedule();
 },true);
 
 document.addEventListener('click',e=>{
-  if(e.target?.id==='autoFindJumps')setTimeout(schedule,80);
+  if(e.target?.id!=='autoFindJumps')return;
+  startAutoSession();
+  setTimeout(schedule,80);
 },true);
 
 const app=document.querySelector('#app')||document.documentElement;
