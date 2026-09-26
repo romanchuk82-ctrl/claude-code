@@ -2,16 +2,37 @@ let FilesetResolver, PoseLandmarker;
 
 let landmarker;
 const G=9.80665;
+const MP_VERSION='0.10.22';
+const MP_CDN=`https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VERSION}`;
+
+async function loadVisionModule(){
+  const sources=[
+    `${MP_CDN}/vision_bundle.mjs?skate=7`,
+    `https://unpkg.com/@mediapipe/tasks-vision@${MP_VERSION}/vision_bundle.mjs?skate=7`
+  ];
+  let lastError;
+  for(const source of sources){
+    try{
+      const mod=await import(source);
+      if(mod?.FilesetResolver&&mod?.PoseLandmarker)return mod;
+    }catch(err){
+      lastError=err;
+      console.warn('MediaPipe module source failed',source,err);
+    }
+  }
+  console.error('MediaPipe module load failed',lastError);
+  throw new Error('Не вдалося завантажити модуль аналізу. Перевір інтернет і спробуй ще раз.');
+}
 
 export async function initPose(){
   if(landmarker) return landmarker;
   if(!FilesetResolver){
-    const mod=await import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22/+esm');
+    const mod=await loadVisionModule();
     FilesetResolver=mod.FilesetResolver; PoseLandmarker=mod.PoseLandmarker;
   }
-  const vision=await FilesetResolver.forVisionTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22/wasm');
+  const vision=await FilesetResolver.forVisionTasks(`${MP_CDN}/wasm`);
   const options={
-    baseOptions:{modelAssetPath:'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task',delegate:'GPU'},
+    baseOptions:{modelAssetPath:'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task',delegate:'GPU'},
     runningMode:'VIDEO',numPoses:1,minPoseDetectionConfidence:.45,minPosePresenceConfidence:.45,minTrackingConfidence:.45
   };
   try{
