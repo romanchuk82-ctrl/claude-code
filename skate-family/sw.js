@@ -1,4 +1,4 @@
-const CACHE='skate-v24';
+const CACHE='skate-v25';
 const ASSETS=[
   '/',
   '/manifest.webmanifest?v=6',
@@ -8,7 +8,7 @@ const ASSETS=[
   '/src/main-v11.js?v=15',
   '/src/cascade-presets.js?v=21',
   '/src/suggestion-calibration.js?v=23',
-  '/src/program-ui.js?v=1',
+  '/src/program-ui.js?v=2',
   '/src/programJudge.js?v=1',
   '/src/jump-detector.js?v=18',
   '/src/style.css?v=5',
@@ -29,7 +29,7 @@ self.addEventListener('install',e=>{
 self.addEventListener('activate',e=>e.waitUntil(Promise.all([
   self.clients.claim(),
   caches.keys().then(keys=>Promise.all(keys.filter(k=>k!==CACHE).map(k=>caches.delete(k))))
-]));
+])));
 
 self.addEventListener('fetch',e=>{
   if(e.request.method!=='GET')return;
