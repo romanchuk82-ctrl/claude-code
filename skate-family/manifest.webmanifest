@@ -12,8 +12,7 @@
   "theme_color": "#081C2C",
   "lang": "uk",
   "icons": [
-    {"src":"/icons/skate-180-v5.png","sizes":"180x180","type":"image/png","purpose":"any"},
-    {"src":"/icons/skate-192-v5.png","sizes":"192x192","type":"image/png","purpose":"any maskable"},
-    {"src":"/icons/skate-512-v5.png","sizes":"512x512","type":"image/png","purpose":"any maskable"}
+    {"src":"/icons/skate-192-v6.png","sizes":"192x192","type":"image/png","purpose":"any maskable"},
+    {"src":"/icons/skate-512-v6.png","sizes":"512x512","type":"image/png","purpose":"any maskable"}
   ]
 }
