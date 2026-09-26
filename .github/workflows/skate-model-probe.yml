@@ -1,0 +1,71 @@
+name: SKATE model probe
+
+on:
+  push:
+    branches: [skate-model-integration]
+    paths:
+      - '.github/workflows/skate-model-probe.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install metadata tools
+        run: pip install -q huggingface_hub safetensors
+      - name: Inspect Mercity CNN-BiLSTM
+        run: |
+          python - <<'PY'
+          from huggingface_hub import HfApi, hf_hub_download
+          import os, json
+          repo='Mercity/figure-skating-cnn-bilstm'
+          api=HfApi()
+          info=api.model_info(repo, files_metadata=True)
+          print('MODEL:', repo)
+          print('PIPELINE:', info.pipeline_tag)
+          print('LIBRARY:', info.library_name)
+          print('TAGS:', info.tags)
+          print('\nFILES:')
+          for s in info.siblings:
+              print(f'- {s.rfilename} size={getattr(s, "size", None)}')
+          print('\nSMALL CONFIG/CODE FILES:')
+          exts=('.json','.yaml','.yml','.py','.md','.txt')
+          for s in info.siblings:
+              size=getattr(s,'size',None) or 0
+              if s.rfilename.endswith(exts) and size < 500_000:
+                  try:
+                      p=hf_hub_download(repo_id=repo, filename=s.rfilename)
+                      print(f'\n===== {s.rfilename} =====')
+                      with open(p,'r',encoding='utf-8',errors='replace') as f:
+                          print(f.read()[:30000])
+                  except Exception as e:
+                      print('READ ERROR',s.rfilename,e)
+          PY
+      - name: Inspect model weight tensor metadata if safetensors
+        run: |
+          python - <<'PY'
+          from huggingface_hub import HfApi, hf_hub_download
+          from safetensors import safe_open
+          repo='Mercity/figure-skating-cnn-bilstm'
+          info=HfApi().model_info(repo, files_metadata=True)
+          files=[s.rfilename for s in info.siblings]
+          sts=[f for f in files if f.endswith('.safetensors')]
+          print('SAFETENSORS:',sts)
+          for f in sts:
+              try:
+                  p=hf_hub_download(repo_id=repo, filename=f)
+                  with safe_open(p,framework='pt',device='cpu') as sf:
+                      print('\nWEIGHTS',f)
+                      for k in sf.keys():
+                          print(k, sf.get_slice(k).get_shape())
+              except Exception as e:
+                  print('WEIGHT ERROR',f,e)
+          PY
