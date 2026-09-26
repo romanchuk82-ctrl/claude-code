@@ -2,13 +2,13 @@ let FilesetResolver, PoseLandmarker;
 
 let landmarker;
 const G=9.80665;
-const MP_VERSION='0.10.22';
+const MP_VERSION='0.10.21';
 const MP_CDN=`https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VERSION}`;
 
 async function loadVisionModule(){
   const sources=[
-    `${MP_CDN}/vision_bundle.mjs?skate=7`,
-    `https://unpkg.com/@mediapipe/tasks-vision@${MP_VERSION}/vision_bundle.mjs?skate=7`
+    `${MP_CDN}/vision_bundle.mjs?skate=8`,
+    `https://unpkg.com/@mediapipe/tasks-vision@${MP_VERSION}/vision_bundle.mjs?skate=8`
   ];
   let lastError;
   for(const source of sources){
