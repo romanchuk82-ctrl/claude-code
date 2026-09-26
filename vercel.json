@@ -2,7 +2,7 @@
   "cleanUrls": true,
   "trailingSlash": false,
   "rewrites": [
-    { "source": "/", "destination": "/skate-family/index.html" },
+    { "source": "/", "destination": "/skate-family" },
     { "source": "/manifest.webmanifest", "destination": "/skate-family/manifest.webmanifest" },
     { "source": "/sw.js", "destination": "/skate-family/sw.js" },
     { "source": "/src/:path*", "destination": "/skate-family/src/:path*" },
