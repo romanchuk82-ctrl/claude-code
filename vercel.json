@@ -5,6 +5,7 @@
     { "source": "/", "destination": "/skate-family" },
     { "source": "/manifest.webmanifest", "destination": "/skate-family/manifest.webmanifest" },
     { "source": "/sw.js", "destination": "/skate-family/sw.js" },
+    { "source": "/src/analyzer.js", "destination": "/skate-family/src/analyzer-v3.js" },
     { "source": "/src/:path*", "destination": "/skate-family/src/:path*" },
     { "source": "/icons/:path*", "destination": "/skate-family/icons/:path*" }
   ],
