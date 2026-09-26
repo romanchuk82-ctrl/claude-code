@@ -1,9 +1,9 @@
-const CACHE='skate-v8';
+const CACHE='skate-v9';
 const ASSETS=[
   '/',
-  '/manifest.webmanifest?v=6',
-  '/icons/skate-180-v6.png',
-  '/icons/skate-192-v6.png',
+  '/manifest.webmanifest?v=7',
+  '/icons/skate-180-v7.png',
+  '/icons/skate-192-v7.png',
   '/icons/skate-512-v6.png',
   '/src/main.js?v=6',
   '/src/style.css?v=5',
