@@ -9,39 +9,64 @@ function nearestTurn(rotation,axel=false){
   return {value:best[0],expected:best[1],distance:d};
 }
 
+// MediaPipe shoulder yaw systematically loses part of the rotation: shoulders close
+// before take-off and open immediately after landing. For classification only we use
+// a conservative proxy correction. Technical q/< calls are still handled separately
+// in scoringEngine and are never invented from this correction.
+function classificationRotation(metrics={},context={}){
+  const raw=Math.max(0,Number(metrics.rotation)||0);
+  const airtime=Math.max(0,Number(metrics.airtime)||0);
+  const reliability=clamp(Number(metrics.rotationReliability??metrics.confidence??55),20,100);
+  const mode=context.mode||'auto';
+  let bias=Number(metrics.classificationRotationBias);
+  if(!Number.isFinite(bias)){
+    bias=(mode==='program'||mode==='pass')?.27:.17;
+    if(airtime>=.42)bias+=.05;
+    if(airtime>=.50)bias+=.05;
+    if(reliability<45)bias-=.05;
+    if(raw<.70)bias*=.45;
+  }
+  bias=clamp(bias,0,.40);
+  let used=raw+bias;
+  // A short low-rotation hop must not be promoted to a double just because of bias.
+  if(airtime>0&&airtime<.34&&raw<1.30)used=Math.min(used,1.34);
+  return {raw,used,airtime,reliability,bias};
+}
+
 export function classifyJump(metrics={},context={}){
-  const r=Number(metrics.rotation)||0;
+  const rot=classificationRotation(metrics,context),r=rot.used;
   const forwardScore=clamp(Number(metrics.forwardScore??metrics.axelLikelihood??context.axelLikelihood??.48),0,1);
   const toeAssist=clamp(Number(metrics.toeAssist??0),0,1);
   const crossed=clamp(Number(metrics.crossed??0),0,1);
   const counterRotation=Boolean(metrics.counterRotation);
   const gap=Number(context.afterJumpGap);
-  const inSequence=Number.isFinite(gap)&&gap>=.30&&gap<=2.5&&r>=1.15&&r<=2.25&&forwardScore>=.52;
+  const inSequence=Number.isFinite(gap)&&gap>=.28&&gap<=2.6&&r>=1.20&&r<=2.10&&forwardScore>=.50;
 
-  // Main benchmark ambiguity: an Axel taken after the previous landing used to
-  // be called 2T when only air rotation was considered. Sequence context plus a
-  // forward take-off is enough to prefer 1A, without forcing unrelated jumps.
+  // Axel after another jump is the main source of false 2T/2S calls in sequences.
+  // Sequence context + a forward take-off is stronger evidence than torso yaw alone.
   if(inSequence){
     const d=Math.abs(r-1.5);
-    return {code:'1A',distance:d,confidence:clamp(Math.round(86-d*24+(forwardScore-.52)*18),52,94),family:'Axel',reason:'sequence-forward-axel'};
+    return {code:'1A',distance:d,confidence:clamp(Math.round(88-d*22+(forwardScore-.50)*16-(rot.bias>.34?4:0)),52,94),family:'Axel',reason:'sequence-forward-axel',rotationRaw:rot.raw,rotationUsed:r,rotationBias:rot.bias};
   }
 
   const ax=nearestTurn(r,true),plain=nearestTurn(r,false);
-  const axelLikely=forwardScore>=.66&&ax.distance<=plain.distance+.28;
+  const axelThreshold=(context.mode==='program'||context.mode==='pass')?.60:.66;
+  const axelLikely=forwardScore>=axelThreshold&&ax.distance<=plain.distance+.30;
   if(axelLikely){
-    return {code:ax.value,distance:ax.distance,confidence:clamp(Math.round(60+forwardScore*32-ax.distance*16),42,95),family:'Axel',reason:'forward-takeoff'};
+    return {code:ax.value,distance:ax.distance,confidence:clamp(Math.round(61+forwardScore*30-ax.distance*16-(rot.bias>.34?4:0)),42,95),family:'Axel',reason:'forward-takeoff',rotationRaw:rot.raw,rotationUsed:r,rotationBias:rot.bias};
   }
 
   const n=plain.value;
-  let family='S',familyConfidence=55;
-  if(toeAssist>=.58){
-    if(counterRotation){family='Lz';familyConfidence=Math.round(62+toeAssist*25)}
-    else {family='T';familyConfidence=Math.round(58+toeAssist*28)}
-  }else if(crossed>=.72){family='Lo';familyConfidence=Math.round(58+crossed*25)}
-  else {family='S';familyConfidence=Math.round(55+(1-toeAssist)*24)}
+  let family='S',familyConfidence=57;
+  if(toeAssist>=.54){
+    if(counterRotation){family='Lz';familyConfidence=Math.round(63+toeAssist*24)}
+    else {family='T';familyConfidence=Math.round(60+toeAssist*26)}
+  }else if(crossed>=.66){family='Lo';familyConfidence=Math.round(60+crossed*23)}
+  else {family='S';familyConfidence=Math.round(57+(1-toeAssist)*22)}
 
-  const ambiguous=(forwardScore>.38&&forwardScore<.66&&r>1.25&&r<2.25)||(toeAssist>.42&&toeAssist<.62);
-  return {code:`${n}${family}`,distance:plain.distance,family,confidence:clamp(Math.round(familyConfidence-plain.distance*16-(ambiguous?10:0)),30,95),ambiguous,reason:ambiguous?'takeoff-ambiguous':'rotation+takeoff-family'};
+  const ambiguous=(forwardScore>.38&&forwardScore<axelThreshold&&r>1.25&&r<2.25)||(toeAssist>.43&&toeAssist<.58)||(Math.abs(r-1.5)<.12&&forwardScore<.55);
+  const correctionPenalty=Math.max(0,(rot.bias-.22)*18);
+  return {code:`${n}${family}`,distance:plain.distance,family,confidence:clamp(Math.round(familyConfidence-plain.distance*16-(ambiguous?8:0)-correctionPenalty),30,95),ambiguous,reason:ambiguous?'takeoff-ambiguous':'rotation+takeoff-family',rotationRaw:rot.raw,rotationUsed:r,rotationBias:rot.bias};
 }
 
 export function refineJumpType(metrics={},selected='auto',context={}){
@@ -49,7 +74,7 @@ export function refineJumpType(metrics={},selected='auto',context={}){
   return classifyJump(metrics,context);
 }
 
-export function groupJumpPasses(jumps=[]){
+export function groupJumpPasses(jumps=[],context={}){
   const src=[...jumps].sort((a,b)=>(a.time||0)-(b.time||0));
   const out=[];
   for(let i=0;i<src.length;i++){
@@ -62,13 +87,13 @@ export function groupJumpPasses(jumps=[]){
       const nextTakeoff=Number(next.metrics?.takeoff??next.time);
       const gap=nextTakeoff-prevLanding;
       const peakGap=(next.time||0)-(prev.time||0);
-      const seqCall=classifyJump(next.metrics,{afterJumpGap:gap});
-      const isAxelSequence=gap>=.30&&gap<=2.5&&peakGap<=3.2&&seqCall.reason==='sequence-forward-axel';
+      const seqCall=classifyJump(next.metrics,{...context,afterJumpGap:gap});
+      const isAxelSequence=gap>=.28&&gap<=2.6&&peakGap<=3.3&&seqCall.reason==='sequence-forward-axel';
       if(isAxelSequence){
         next.code=seqCall.code;next.suggestion=`${seqCall.code}?`;next.confidence=Math.min(next.confidence||99,seqCall.confidence);next.needsConfirm=true;
         group.push(next);seq=true;i++;continue;
       }
-      if(gap<=1.05&&peakGap<=1.65){group.push(next);i++;continue}
+      if(gap<=1.08&&peakGap<=1.70){group.push(next);i++;continue}
       break;
     }
     if(group.length===1){out.push(first);continue}
