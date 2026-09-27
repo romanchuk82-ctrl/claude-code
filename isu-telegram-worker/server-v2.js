@@ -67,9 +67,12 @@ async function extractTimedFrames(videoPath, dir, opts = {}) {
   const prefix = opts.prefix || 'frame';
   const max = opts.max || Math.ceil(length * fps) + 2;
   const out = path.join(dir, `${prefix}-%04d.jpg`);
+  const filters = [`fps=${fps}`];
+  if (opts.cropNorm) { const c=opts.cropNorm; filters.push(`crop=iw*${c.w}:ih*${c.h}:iw*${c.x}:ih*${c.y}`); }
+  filters.push(`scale=${width}:-2`);
   await runFfmpeg([
     '-ss', String(start), '-i', videoPath, '-t', String(length),
-    '-vf', `fps=${fps},scale=${width}:-2`, '-q:v', '3',
+    '-vf', filters.join(','), '-q:v', '3',
     '-frames:v', String(max), out
   ]);
   const names = (await fs.readdir(dir))
@@ -214,6 +217,11 @@ function inferJumpTypeFromMechanics(o) {
   const take = o?.skating_foot;
   const land = o?.landing_foot;
   const free = o?.free_leg_action;
+  if (toe === 'yes') {
+    if (edge === 'inside') return 'F';
+    if (edge === 'outside' && take !== 'unclear' && land !== 'unclear') return take === land ? 'T' : 'Lz';
+    return 'UNRESOLVED';
+  }
   if (dir === 'forward' && toe === 'no') return edge === 'outside' || edge === 'unclear' ? 'A' : 'UNRESOLVED';
   if (dir !== 'backward') return 'UNRESOLVED';
   if (toe === 'no') {
@@ -221,11 +229,21 @@ function inferJumpTypeFromMechanics(o) {
     if (edge === 'outside' && take !== 'unclear' && land !== 'unclear' && take === land) return 'Lo';
     return 'UNRESOLVED';
   }
-  if (toe === 'yes') {
-    if (edge === 'inside') return 'F';
-    if (edge === 'outside' && take !== 'unclear' && land !== 'unclear') return take === land ? 'T' : 'Lz';
-  }
   return 'UNRESOLVED';
+}
+
+async function detectLowerBodyCrop(videoPath, dir, takeoff, duration, index) {
+  const start=Math.max(0,takeoff-0.35);
+  const frames=await extractTimedFrames(videoPath,dir,{start,length:Math.min(0.55,Math.max(0.3,(duration||takeoff+0.2)-start)),fps:5,width:1280,prefix:`bbox-${index}`,max:4});
+  const content=[{type:'input_text',text:'Find the figure skater lower body in these chronological frames. Return JSON only: {"bbox":[x1,y1,x2,y2],"confidence":0}. Coordinates are normalized 0..1000. bbox must be the UNION box covering hips, both legs and both skates across all supplied frames. Ignore boards/background.'}];
+  for (const f of frames) { const b64=(await fs.readFile(f.path)).toString('base64'); content.push({type:'input_image',image_url:`data:image/jpeg;base64,${b64}`,detail:'high'}); }
+  const r=await createJsonResponse([{role:'user',content}],{label:`lower-body-bbox-${index}`,primaryEffort:'medium',primaryTokens:500});
+  const b=Array.isArray(r?.bbox)?r.bbox.map(Number):null;
+  if (!b || b.length!==4 || b.some(x=>!Number.isFinite(x)) || Number(r?.confidence||0)<55) return null;
+  let [x1,y1,x2,y2]=b.map(x=>Math.max(0,Math.min(1000,x))/1000);
+  if (x2<=x1 || y2<=y1) return null;
+  const w=x2-x1,h=y2-y1; x1=Math.max(0,x1-w*0.18); x2=Math.min(1,x2+w*0.18); y1=Math.max(0,y1-h*0.18); y2=Math.min(1,y2+h*0.20);
+  return {x:x1,y:y1,w:x2-x1,h:y2-y1};
 }
 
 async function identifyJumpTypePanel(videoPath, dir, duration, locator) {
@@ -250,16 +268,26 @@ Use chronological motion. Take-off direction means blade travel immediately befo
     };
     const first=await ask(wide,'full jump context including landing');
     const second=await ask(dense,'dense take-off sequence');
+    const cropNorm=await detectLowerBodyCrop(videoPath,dir,takeoff,duration,i+1);
+    const zoom=cropNorm ? await extractTimedFrames(videoPath,dir,{start:takeStart,length:1.10,fps:30,width:1500,prefix:`identity-zoom-${i+1}`,max:34,cropNorm}) : [];
+    const third=zoom.length ? await ask(zoom,'zoomed lower-body replay: prioritize toe-pick contact, take-off edge and skating foot') : null;
     const type1=inferJumpTypeFromMechanics(first);
+    const type2=inferJumpTypeFromMechanics(second);
+    const type3=third ? inferJumpTypeFromMechanics(third) : 'UNRESOLVED';
     const merged={...first};
-    for (const k of ['takeoff_direction','toe_assist','takeoff_edge','takeoff_foot','free_leg_action']) {
+    for (const k of ['takeoff_direction','toe_assist','takeoff_edge','skating_foot','toe_pick_foot','free_leg_action']) {
       if (first[k] !== second[k] && second[k] !== 'unclear') merged[k]='unclear';
     }
+    if (third && Number(third.confidence)>=65) {
+      for (const k of ['toe_assist','takeoff_edge','skating_foot','toe_pick_foot']) if (third[k] && third[k] !== 'unclear') merged[k]=third[k];
+    }
     const typeMerged=inferJumpTypeFromMechanics(merged);
-    const strong=Number(first.confidence)>=70 && Number(second.confidence)>=70;
-    const consensus_type = strong && type1 !== 'UNRESOLVED' && typeMerged === type1 ? type1 : 'UNRESOLVED';
-    const candidates=[...new Set([type1,inferJumpTypeFromMechanics(second),typeMerged].filter(x=>x && x!=='UNRESOLVED'))];
-    results.push({jump:i+1,consensus_type,mechanics_full:first,mechanics_takeoff:second,merged_mechanics:merged,candidates});
+    let consensus_type='UNRESOLVED';
+    if (third && Number(third.confidence)>=75 && type3!=='UNRESOLVED' && third.toe_assist==='yes') consensus_type=type3;
+    else if (Number(first.confidence)>=70 && Number(second.confidence)>=70 && type1!=='UNRESOLVED' && type1===type2) consensus_type=type1;
+    else if (typeMerged!=='UNRESOLVED' && [type1,type2,type3].filter(x=>x===typeMerged).length>=2) consensus_type=typeMerged;
+    const candidates=[...new Set([type1,type2,type3,typeMerged].filter(x=>x && x!=='UNRESOLVED'))];
+    results.push({jump:i+1,consensus_type,mechanics_full:first,mechanics_takeoff:second,mechanics_zoom:third,cropNorm,merged_mechanics:merged,candidates});
   }
   return results;
 }
