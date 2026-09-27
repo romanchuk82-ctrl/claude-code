@@ -1,0 +1,151 @@
+/* Home screen clarity layer - keeps analysis logic untouched. */
+.home-intro{
+  background:linear-gradient(145deg,#081c2c,#103d5b);
+  padding:20px 20px 18px;
+  border-radius:24px;
+}
+.home-intro .home-kicker{
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  padding:6px 9px;
+  border-radius:999px;
+  background:rgba(255,255,255,.1);
+  color:#d8f2ff;
+  font-size:10px;
+  font-weight:850;
+  letter-spacing:.04em;
+  text-transform:uppercase;
+  margin-bottom:10px;
+}
+.home-intro h1{
+  max-width:none;
+  font-size:27px;
+  line-height:1.08;
+  margin:0 0 7px;
+}
+.home-intro p{
+  max-width:none;
+  color:#cce9fa;
+  font-size:13px;
+  line-height:1.42;
+}
+
+.home-mode-title{
+  margin-top:20px;
+  margin-bottom:9px;
+  align-items:center;
+}
+.home-mode-title h2{font-size:20px}
+.home-mode-title span{font-size:11px}
+
+.mode-picker{
+  padding:10px;
+  border-radius:22px;
+  display:grid;
+  gap:9px;
+  box-shadow:0 8px 28px rgba(8,28,44,.06);
+}
+.mode-picker > div{
+  display:grid!important;
+  gap:9px!important;
+}
+.mode-picker .mode-option{
+  position:relative;
+  width:100%;
+  margin:0;
+  border:1px solid var(--line);
+  background:#fff;
+  color:var(--ink);
+  border-radius:17px;
+  min-height:82px;
+  padding:12px 42px 12px 12px;
+  box-shadow:none;
+  display:grid;
+  grid-template-columns:46px 1fr;
+  align-items:center;
+  gap:12px;
+  text-align:left;
+}
+.mode-picker .mode-option:after{
+  content:'›';
+  position:absolute;
+  right:15px;
+  top:50%;
+  transform:translateY(-50%);
+  font-size:27px;
+  line-height:1;
+  color:#8aa1b0;
+  font-weight:500;
+}
+.mode-picker .mode-option:active{
+  transform:scale(.99);
+  background:#f7fbff;
+}
+.mode-picker .mode-option.mode-program{
+  border-color:#b9dcf7;
+  background:linear-gradient(135deg,#fff,#f1f9ff);
+}
+.mode-icon{
+  width:46px;
+  height:46px;
+  border-radius:14px;
+  display:grid;
+  place-items:center;
+  background:#e9f5ff;
+  font-size:22px;
+}
+.mode-program .mode-icon{background:#e6f5ff}
+.mode-copy b{
+  display:block;
+  font-size:15px;
+  line-height:1.2;
+  color:var(--ink);
+}
+.mode-copy small{
+  display:block;
+  margin-top:4px;
+  color:var(--muted);
+  font-size:11px;
+  line-height:1.32;
+  font-weight:650;
+}
+.mode-time{
+  display:inline-block;
+  margin-top:5px;
+  color:#0b6dcc;
+  font-size:10px;
+  font-weight:850;
+}
+.mode-picker > .notice{
+  margin:2px 4px 1px!important;
+  padding:9px 10px;
+  border-radius:12px;
+  background:#f5f9fc;
+  color:#607786;
+  font-size:10px;
+  text-align:center;
+}
+
+/* Legacy upload blocks stay in DOM for file inputs and existing handlers, but are hidden visually. */
+.home-legacy-upload{display:none!important}
+
+.home-privacy-note{
+  display:flex;
+  gap:9px;
+  align-items:flex-start;
+  margin:10px 2px 0;
+  padding:10px 12px;
+  border-radius:14px;
+  background:#edf7ff;
+  color:#456777;
+  font-size:11px;
+  line-height:1.38;
+}
+.home-privacy-note b{color:#17384a}
+
+@media(max-width:380px){
+  .home-intro h1{font-size:24px}
+  .mode-picker .mode-option{min-height:76px;grid-template-columns:42px 1fr;padding-left:10px}
+  .mode-icon{width:42px;height:42px}
+}
