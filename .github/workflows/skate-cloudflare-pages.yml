@@ -47,15 +47,22 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          curl --fail --silent --show-error --location --retry 6 --retry-delay 2 --retry-all-errors \
-            --output /tmp/skate-index https://skate-family.pages.dev/
-          grep -q 'main.js?v=8' /tmp/skate-index
+          wait_contains() {
+            local url="$1"
+            local needle="$2"
+            local out="$3"
+            for attempt in $(seq 1 15); do
+              if curl --fail --silent --show-error --location --output "$out" "${url}?deploy=${GITHUB_SHA}&attempt=${attempt}" \
+                && grep -q "$needle" "$out"; then
+                return 0
+              fi
+              sleep 3
+            done
+            echo "Production verification failed for ${url}: missing ${needle}" >&2
+            return 1
+          }
 
-          curl --fail --silent --show-error --location --retry 6 --retry-delay 2 --retry-all-errors \
-            --output /tmp/skate-engine https://skate-family.pages.dev/src/scoringEngine.js
-          grep -q 'SONYA_MAY_2026_BENCHMARK' /tmp/skate-engine
-
-          curl --fail --silent --show-error --location --retry 6 --retry-delay 2 --retry-all-errors \
-            --output /tmp/skate-unified https://skate-family.pages.dev/src/programJudgeUnified.js
-          grep -q 'shared-ijs-v3-unified' /tmp/skate-unified
+          wait_contains https://skate-family.pages.dev/ 'main.js?v=8' /tmp/skate-index
+          wait_contains https://skate-family.pages.dev/src/scoringEngine.js 'SONYA_MAY_2026_BENCHMARK' /tmp/skate-engine
+          wait_contains https://skate-family.pages.dev/src/programJudgeUnified.js 'shared-ijs-v3-unified' /tmp/skate-unified
           echo 'SKATE Cloudflare Pages production verification passed.'
