@@ -121,12 +121,28 @@ function parseJsonLoose(text) {
   return JSON.parse(cleaned.slice(first, last + 1));
 }
 
+async function classifyShortElement(videoPath, dir, duration, caption) {
+  const frames = await extractTimedFrames(videoPath, dir, { start: 0, length: duration, fps: duration <= 6 ? 10 : 6, width: 768, prefix: 'classify', max: 90 });
+  const content = [{ type: 'input_text', text:
+`Classify the MAIN figure-skating element in this clip. This is classification only, not an ISU technical call.
+Return JSON only: {"category":"jump|spin|step|choreographic|unknown","confidence":75,"notes":"short evidence"}.
+Do NOT name a jump type, revolutions, spin level or GOE. Judge from the whole motion sequence, not one still frame.
+Duration=${duration.toFixed(2)}s. Caption=${caption || '(none)'}.` }];
+  for (const f of frames) {
+    const b64 = (await fs.readFile(f.path)).toString('base64');
+    content.push({ type: 'input_text', text: `t=${f.time.toFixed(3)}s` });
+    content.push({ type: 'input_image', image_url: `data:image/jpeg;base64,${b64}`, detail: 'low' });
+  }
+  const response = await openai.responses.create({ model: MODEL, reasoning: { effort: 'medium' }, max_output_tokens: 500, input: [{ role: 'user', content }] });
+  return parseJsonLoose(textFromResponse(response));
+}
+
 async function locateJumpStructure(frames, duration, caption) {
   const content = [{ type: 'input_text', text:
 `Locate jump events in this short figure-skating clip. This is only a temporal locator, NOT the final ISU call.
 Return JSON only:
-{"relationship":"solo|combination|sequence|multiple_separate|unknown","jumps":[{"index":1,"takeoff":1.2,"landing":1.8,"likely_type":"T|S|Lo|F|Lz|A|unknown","likely_revolutions":"1|2|3|4|unknown","confidence":75}],"clip_confidence":75,"notes":"short"}
-Times are seconds from clip start. Detect every visible jump, up to 4. Do not force jump type if unclear.
+{"relationship":"solo|combination|sequence|multiple_separate|unknown","jumps":[{"index":1,"takeoff":1.2,"landing":1.8,"confidence":75}],"clip_confidence":75,"notes":"short"}
+Times are seconds from clip start. Detect every visible jump, up to 4. DO NOT identify jump type or revolutions here. This locator may only determine timing and relationship.
 Duration=${duration?.toFixed(2) || 'unknown'}s. Caption=${caption || '(none)'}.` }];
   for (const f of frames) {
     content.push({ type: 'input_text', text: `t=${f.time.toFixed(3)}s` });
@@ -195,7 +211,8 @@ async function analyzeJumpClip(videoPath, dir, duration, caption, onProgress) {
 MODE: JUMP / ELEMENT ANALYSIS.
 Duration: ${duration.toFixed(2)}s. Caption: ${caption || '(none)'}.
 A first pass located this temporal structure: ${JSON.stringify(locator)}.
-Treat that locator only as navigation, NOT as a technical call.
+Treat that locator only as navigation, NOT as a technical call. It contains no valid jump-type evidence.
+Identify jump TYPE independently from the moving take-off sequence first (A/T/S/Lo/F/Lz), then revolutions, then relationship, rotation and edge. Do not infer type from the landing pose.
 First finish the Technical Call independently, then GOE.
 The NORMAL CONTEXT frames represent temporal continuity around the whole element and are for jump relationship/rhythm/take-off context.
 The DENSE REPLAY frames are 24 fps around each located jump and are the primary evidence for landing blade rotation and slow review.
@@ -217,7 +234,7 @@ Use emoji section headings such as 🔎 TECHNICAL CALL, 📊 GOE, 🔁 ALTERNATI
   return { text, locator };
 }
 
-async function analyzeGeneric(videoPath, dir, duration, caption, fullMode) {
+async function analyzeGeneric(videoPath, dir, duration, caption, fullMode, classification = null) {
   const fps = fullMode ? (duration <= 180 ? 1 : 0.75) : (duration <= 30 ? 3 : 1);
   const max = fullMode ? 240 : 90;
   const frames = await extractTimedFrames(videoPath, dir, {
@@ -226,7 +243,8 @@ async function analyzeGeneric(videoPath, dir, duration, caption, fullMode) {
   const content = [{ type: 'input_text', text:
 `${RULES}
 
-MODE: ${fullMode ? 'FULL PROGRAM ANALYSIS' : 'JUMP / ELEMENT ANALYSIS'}.
+MODE: ${fullMode ? 'FULL PROGRAM ANALYSIS' : classification?.category ? classification.category.toUpperCase() + ' ELEMENT ANALYSIS' : 'ELEMENT ANALYSIS'}.
+Pre-classification: ${classification ? JSON.stringify(classification) : '(none)'}. Treat this only as routing, not as a technical call.
 Duration: ${duration.toFixed(2)}s. Caption: ${caption || '(none)'}.
 Frames are chronological samples with timestamps. For a full program: inventory first, then Technical Calls, GOE, TES, PCS, deductions. Do not invent category/segment, requirements, factors, levels or PCS when evidence/context is insufficient. Explicitly flag every limitation caused by sampling.` }];
   for (const f of frames) {
@@ -352,12 +370,13 @@ async function processVideoMessage(msg, video) {
     if (!duration || duration <= 0) throw new Error('Could not determine video duration');
     const caption = msg.caption || '';
     const fullMode = duration > 60 || /\bfull\b|повн/i.test(caption);
-    const shortJumpMode = !fullMode && duration <= 30;
+    const shortElementMode = !fullMode && duration <= 30;
+    let elementClassification = null;
 
-    const eta = shortJumpMode ? (duration <= 12 ? '≈ 45–90 с' : '≈ 1–2 хв') : fullMode ? '≈ 3–6 хв' : '≈ 1–3 хв';
+    const eta = shortElementMode ? (duration <= 12 ? '≈ 45–90 с' : '≈ 1–2 хв') : fullMode ? '≈ 3–6 хв' : '≈ 1–3 хв';
     await tg('editMessageText', {
       chat_id: msg.chat.id, message_id: progress.message_id,
-      text: `⏳ Відео ${duration.toFixed(1)} с. Режим: ${fullMode ? 'FULL PROGRAM' : shortJumpMode ? 'JUMP / COMBO' : 'FRAGMENT'}. Орієнтовно ${eta}.`
+      text: `⏳ Відео ${duration.toFixed(1)} с. Режим: ${fullMode ? 'FULL PROGRAM' : shortElementMode ? 'ELEMENT' : 'FRAGMENT'}. Орієнтовно ${eta}.`
     });
 
     let result;
@@ -367,31 +386,27 @@ async function processVideoMessage(msg, video) {
         extractTimedFrames, textFromResponse,
         onProgress: async text => tg('editMessageText', { chat_id: msg.chat.id, message_id: progress.message_id, text })
       });
-    } else if (shortJumpMode) {
-      result = await analyzeJumpClip(videoPath, dir, duration, caption, async text => {
-        await tg('editMessageText', { chat_id: msg.chat.id, message_id: progress.message_id, text });
-      });
+    } else if (shortElementMode) {
+      await tg('editMessageText', { chat_id: msg.chat.id, message_id: progress.message_id, text: '⏳ Крок 1: визначаю клас елемента без припущення, що це стрибок.' });
+      elementClassification = await classifyShortElement(videoPath, dir, duration, caption);
+      if (elementClassification.category === 'jump') {
+        result = await analyzeJumpClip(videoPath, dir, duration, caption, async text => {
+          await tg('editMessageText', { chat_id: msg.chat.id, message_id: progress.message_id, text });
+        });
+      } else {
+        await tg('editMessageText', { chat_id: msg.chat.id, message_id: progress.message_id, text: `⏳ Визначено: ${elementClassification.category}. Роблю Technical Call без jump-bias.` });
+        result = await analyzeGeneric(videoPath, dir, duration, caption, false, elementClassification);
+      }
     } else {
       await tg('editMessageText', { chat_id: msg.chat.id, message_id: progress.message_id, text: '⏳ Аналізую фрагмент за ISU 2026/27.' });
-      result = await analyzeGeneric(videoPath, dir, duration, caption, false);
+      result = await analyzeGeneric(videoPath, dir, duration, caption, false, null);
     }
 
     console.log('analysis complete', {
-      duration, mode: fullMode ? 'full' : shortJumpMode ? 'jump' : 'fragment',
+      duration, mode: fullMode ? 'full' : elementClassification?.category || (shortElementMode ? 'element' : 'fragment'),
       locator: result.locator || null, chars: result.text.length
     });
     await deliverResult(msg.chat.id, msg.message_id, progress.message_id, result.text);
-    try {
-      const parentSummary = await makeParentSummary(result.text);
-      await tg('sendMessage', {
-        chat_id: msg.chat.id,
-        text: parentSummary,
-        reply_to_message_id: msg.message_id,
-        allow_sending_without_reply: true
-      });
-    } catch (summaryErr) {
-      console.error('parent summary error', summaryErr);
-    }
   } catch (err) {
     console.error('analysis error', err);
     const errorText = err?.status === 429 || err?.code === 'credit_balance_exhausted'
