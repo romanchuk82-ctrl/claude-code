@@ -24,6 +24,7 @@ jobs:
           set -euo pipefail
           sed -i "s/const MP_VERSION='0.10.22';/const MP_VERSION='0.10.21';/" skate-family/src/analyzer.js
           grep -q "MP_VERSION='0.10.21'" skate-family/src/analyzer.js
+          grep -q 'monotonicPoseTimestamp' skate-family/src/analyzer.js
 
       - name: Validate Sofia May 2026 benchmark
         run: |
@@ -69,8 +70,9 @@ jobs:
             return 1
           }
 
-          wait_contains https://skate-family.pages.dev/ 'main.js?v=9' /tmp/skate-index
+          wait_contains https://skate-family.pages.dev/ 'main.js?v=11' /tmp/skate-index
           wait_contains https://skate-family.pages.dev/src/analyzer.js "MP_VERSION='0.10.21'" /tmp/skate-analyzer
+          wait_contains https://skate-family.pages.dev/src/analyzer.js 'monotonicPoseTimestamp' /tmp/skate-analyzer-clock
           wait_contains https://skate-family.pages.dev/src/scoringEngine.js 'SONYA_MAY_2026_BENCHMARK' /tmp/skate-engine
           wait_contains https://skate-family.pages.dev/src/programJudgeUnified.js 'shared-ijs-v3-unified' /tmp/skate-unified
           echo 'SKATE Cloudflare Pages production verification passed.'
