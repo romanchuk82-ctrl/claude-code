@@ -229,6 +229,40 @@ Frames are chronological samples with timestamps. For a full program: inventory 
   return { text, locator: null };
 }
 
+function cleanTelegramText(text) {
+  return String(text || '')
+    .replace(/\*\*/g, '')
+    .replace(/__/g, '')
+    .replace(/^#{1,6}\s*/gm, '')
+    .replace(/^[-*]\s+/gm, '• ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+async function makeParentSummary(resultText) {
+  const response = await openai.responses.create({
+    model: MODEL,
+    reasoning: { effort: 'low' },
+    max_output_tokens: 650,
+    input: [{ role: 'user', content: [{ type: 'input_text', text:
+`Using ONLY the completed ISU analysis below, create a very short Ukrainian summary for parents. Do not change or re-judge the Technical Call. Do not invent a diagnosis or training technique not supported by the analysis. Use exactly this visual structure, no Markdown asterisks:
+
+👨‍👩‍👧 ДЛЯ БАТЬКІВ
+⛸ Елемент: ...
+[✅ or ⚠️ or ❌] Підсумок: one plain-language sentence saying whether the element looks good, borderline, or has a clear issue.
+🎯 Що покращити: 1-2 concrete priorities directly supported by the analysis. If nothing reliable can be prescribed, say what needs a clearer video/replay.
+📌 Простими словами: one short final sentence.
+
+Use ✅ only for a clean/confident result without a meaningful technical issue; ⚠️ for borderline/uncertain/minor issue; ❌ only for a clearly established significant error.
+
+COMPLETED ANALYSIS:
+${resultText}` }]}]
+  });
+  const text = cleanTelegramText(textFromResponse(response));
+  if (!text) throw new Error('Parent summary returned no text');
+  return text;
+}
+
 function chunkTelegramText(text, limit = 3800) {
   const chunks = [];
   let rest = text.trim();
@@ -338,6 +372,17 @@ async function processVideoMessage(msg, video) {
       locator: result.locator || null, chars: result.text.length
     });
     await deliverResult(msg.chat.id, msg.message_id, progress.message_id, result.text);
+    try {
+      const parentSummary = await makeParentSummary(result.text);
+      await tg('sendMessage', {
+        chat_id: msg.chat.id,
+        text: parentSummary,
+        reply_to_message_id: msg.message_id,
+        allow_sending_without_reply: true
+      });
+    } catch (summaryErr) {
+      console.error('parent summary error', summaryErr);
+    }
   } catch (err) {
     console.error('analysis error', err);
     const errorText = err?.status === 429 || err?.code === 'credit_balance_exhausted'
