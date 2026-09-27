@@ -1,14 +1,13 @@
 import asyncio
-import base64
-import http.client
 import json
 import logging
 import logging.handlers
 import os
+import shutil
+import subprocess
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import urlparse
 
 QUEUE_ROOT = Path(r"C:\Users\test\Downloads\ISU-Judge-Telegram-Inbox\queue")
 STATE_FILE = QUEUE_ROOT.parent / "last_seen.txt"
@@ -103,48 +102,47 @@ async def _queue_video(message):
         logger.exception("VIDEO_DOWNLOAD_ERROR message_id=%s", message.id)
         return None
 
-def _post_video(path, caption):
-    endpoint = os.environ.get(
-        "ISU_ANALYSIS_URL",
-        "https://isu-judge-telegram-worker.onrender.com/analyze-upload",
-    )
-    secret = os.environ.get("ISU_UPLOAD_SECRET", "")
-    if not secret:
-        raise RuntimeError("ISU_UPLOAD_SECRET is not configured")
+def _run_codex_analysis(path, caption):
+    rules_source = Path(r"C:\Users\test\Downloads\isu-worker-build\isu-telegram-worker\project-rules.md")
+    rules_target = path.parent / "project-rules.md"
+    shutil.copy2(rules_source, rules_target)
+    result_path = path.parent / "codex_result.txt"
+    codex_exe = shutil.which("codex")
+    if not codex_exe:
+        raise RuntimeError("Codex CLI is not available")
 
-    parsed = urlparse(endpoint)
-    connection_type = (
-        http.client.HTTPSConnection if parsed.scheme == "https"
-        else http.client.HTTPConnection
+    prompt = (
+        "Act as an ISU Judge for Single Skating 2026/27. Read project-rules.md completely. "
+        f"Independently analyze only {path.name} in this directory. "
+        "Do not open or use any calibration, protocol, result, or prepared-answer files. "
+        "Finish the Technical Call first, then assess GOE. Use ffmpeg and image inspection yourself "
+        "to review normal-speed context and dense take-off/landing frames. Judge rotation from the "
+        "blade, never shoulders or hips. If edge or rotation is not reliably visible, write "
+        "NOT RELIABLY VISIBLE or UNRESOLVED. Write the final answer in Ukrainian, keep official ISU "
+        "codes in English, and keep it concise enough for Telegram. Use these sections: TECHNICAL CALL, "
+        "GOE, LIMITATIONS, PARENT SUMMARY. Do not include tool narration or internal process notes. "
+        f"User caption for context only, not a technical call: {caption or '(none)'}."
     )
-    conn = connection_type(parsed.hostname, parsed.port, timeout=900)
-    target = parsed.path or "/"
-    if parsed.query:
-        target += "?" + parsed.query
-    size = path.stat().st_size
-    caption_b64 = base64.b64encode(caption.encode("utf-8")).decode("ascii")
-    conn.putrequest("POST", target)
-    conn.putheader("Content-Type", "application/octet-stream")
-    conn.putheader("Content-Length", str(size))
-    conn.putheader("X-ISU-Upload-Secret", secret)
-    conn.putheader("X-ISU-Caption-B64", caption_b64)
-    conn.endheaders()
-    with path.open("rb") as source:
-        while True:
-            chunk = source.read(1024 * 1024)
-            if not chunk:
-                break
-            conn.send(chunk)
-    response = conn.getresponse()
-    body = response.read()
-    status = response.status
-    conn.close()
-    if status != 200:
-        raise RuntimeError(f"analysis service HTTP {status}: {body[:300].decode('utf-8', 'replace')}")
-    payload = json.loads(body.decode("utf-8"))
-    if not payload.get("ok") or not payload.get("analysis"):
-        raise RuntimeError(payload.get("error") or "analysis service returned no result")
-    return payload
+    command = [
+        codex_exe, "exec", "-", "--skip-git-repo-check", "--ephemeral",
+        "--approve-for-me", "--ignore-user-config", "-o", str(result_path), "--color", "never",
+    ]
+    env = os.environ.copy()
+    env.update({"PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8", "NO_COLOR": "1"})
+    completed = subprocess.run(
+        command, input=prompt, text=True, encoding="utf-8",
+        cwd=path.parent, capture_output=True, timeout=1200,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0), env=env,
+    )
+    if completed.returncode != 0:
+        tail = (completed.stderr or completed.stdout or "")[-800:]
+        raise RuntimeError(f"Codex analysis failed ({completed.returncode}): {tail}")
+    if not result_path.exists():
+        raise RuntimeError("Codex completed without a result file")
+    analysis = result_path.read_text(encoding="utf-8").strip()
+    if not analysis:
+        raise RuntimeError("Codex returned an empty result")
+    return {"ok": True, "analysis": analysis, "parentSummary": "", "mode": "local-codex"}
 
 def _chunks(text, limit=3800):
     parts = []
@@ -189,7 +187,7 @@ async def _process_job(client, job_dir, progress_message_id):
         logger.info("ANALYSIS_START message_id=%s", video_id)
 
         analysis_task = asyncio.create_task(
-            asyncio.to_thread(_post_video, local_file, data.get("caption", ""))
+            asyncio.to_thread(_run_codex_analysis, local_file, data.get("caption", ""))
         )
         started = time.monotonic()
         status_steps = [
