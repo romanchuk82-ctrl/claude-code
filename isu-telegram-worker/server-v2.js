@@ -239,9 +239,9 @@ async function detectLowerBodyCrop(videoPath, dir, takeoff, duration, index) {
   for (const f of frames) { const b64=(await fs.readFile(f.path)).toString('base64'); content.push({type:'input_image',image_url:`data:image/jpeg;base64,${b64}`,detail:'high'}); }
   const r=await createJsonResponse([{role:'user',content}],{label:`lower-body-bbox-${index}`,primaryEffort:'medium',primaryTokens:500});
   const b=Array.isArray(r?.bbox)?r.bbox.map(Number):null;
-  if (!b || b.length!==4 || b.some(x=>!Number.isFinite(x)) || Number(r?.confidence||0)<55) return null;
+  if (!b || b.length!==4 || b.some(x=>!Number.isFinite(x)) || Number(r?.confidence||0)<55) return {x:0.18,y:0.12,w:0.64,h:0.84,fallback:true};
   let [x1,y1,x2,y2]=b.map(x=>Math.max(0,Math.min(1000,x))/1000);
-  if (x2<=x1 || y2<=y1) return null;
+  if (x2<=x1 || y2<=y1) return {x:0.18,y:0.12,w:0.64,h:0.84,fallback:true};
   const w=x2-x1,h=y2-y1; x1=Math.max(0,x1-w*0.18); x2=Math.min(1,x2+w*0.18); y1=Math.max(0,y1-h*0.18); y2=Math.min(1,y2+h*0.20);
   return {x:x1,y:y1,w:x2-x1,h:y2-y1};
 }
@@ -271,6 +271,7 @@ Use chronological motion. Take-off direction means blade travel immediately befo
     const cropNorm=await detectLowerBodyCrop(videoPath,dir,takeoff,duration,i+1);
     const zoom=cropNorm ? await extractTimedFrames(videoPath,dir,{start:takeStart,length:1.10,fps:30,width:1500,prefix:`identity-zoom-${i+1}`,max:34,cropNorm}) : [];
     const third=zoom.length ? await ask(zoom,'zoomed lower-body replay: prioritize toe-pick contact, take-off edge and skating foot') : null;
+    console.log('jump identity zoom', JSON.stringify({jump:i+1,cropNorm,zoomFrames:zoom.length,third}));
     const type1=inferJumpTypeFromMechanics(first);
     const type2=inferJumpTypeFromMechanics(second);
     const type3=third ? inferJumpTypeFromMechanics(third) : 'UNRESOLVED';
