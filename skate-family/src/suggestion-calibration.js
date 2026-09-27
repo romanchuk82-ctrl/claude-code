@@ -8,6 +8,7 @@ let programTypeInitialized=false;
 const pending=new Map();
 const LARGE_VIDEO_BYTES=60*1024*1024;
 let largeVideoSelection=null;
+let lastPickerSignature='';
 
 function setStatus(text){
   const node=document.querySelector('#autoFindStatus');
@@ -19,10 +20,56 @@ function humanSize(bytes){
   return `${mb>=100?mb.toFixed(0):mb.toFixed(1)} MB`;
 }
 
+function fileSignature(file){
+  if(!file)return'';
+  return `${file.name||'video'}:${file.size||0}:${file.lastModified||0}`;
+}
+
+function rememberSelectedFile(file){
+  if(!file)return;
+  lastPickerSignature=fileSignature(file);
+  largeVideoSelection=file.size>=LARGE_VIDEO_BYTES?{name:file.name||'video',size:file.size,type:file.type||''}:null;
+  setTimeout(schedule,0);
+}
+
+function recoverPickerSelection(){
+  const input=document.querySelector('#fileLibrary');
+  const file=input?.files?.[0];
+  if(!file)return;
+  const sig=fileSignature(file);
+  if(sig===lastPickerSignature)return;
+  rememberSelectedFile(file);
+  input.dispatchEvent(new Event('change',{bubbles:true}));
+}
+
+function patchIOSPicker(){
+  const input=document.querySelector('#fileLibrary');
+  const button=document.querySelector('#pickLibrary');
+  if(!input||!button||input.dataset.skateDirectPicker==='1')return;
+  input.dataset.skateDirectPicker='1';
+  input.hidden=false;
+  input.removeAttribute('hidden');
+  button.style.position='relative';
+  button.style.overflow='hidden';
+  button.appendChild(input);
+  Object.assign(input.style,{
+    position:'absolute',inset:'0',width:'100%',height:'100%',opacity:'0',
+    zIndex:'20',cursor:'pointer',fontSize:'1px',display:'block'
+  });
+  input.addEventListener('click',e=>e.stopPropagation());
+  input.addEventListener('input',()=>{
+    const file=input.files?.[0];
+    if(!file)return;
+    const sig=fileSignature(file);
+    if(sig!==lastPickerSignature){
+      rememberSelectedFile(file);
+      input.dispatchEvent(new Event('change',{bubbles:true}));
+    }
+  });
+}
+
 function optimizeVideoElements(){
   document.querySelectorAll('video').forEach(video=>{
-    // iOS can eagerly buffer a 100+ MB local blob when preload=auto. Metadata is
-    // enough for seeking and for the frame-by-frame analyzers, and keeps memory low.
     if(video.preload!=='metadata')video.preload='metadata';
     video.setAttribute('playsinline','');
     video.setAttribute('webkit-playsinline','');
@@ -167,6 +214,7 @@ function schedule(){
   scheduled=true;
   requestAnimationFrame(()=>{
     scheduled=false;
+    patchIOSPicker();
     optimizeVideoElements();
     ensureLargeVideoNotice();
     rehydrateSuggestionState();
@@ -180,7 +228,7 @@ document.addEventListener('change',e=>{
   const target=e.target;
   if(target?.id==='fileLibrary'||target?.id==='fileCamera'){
     const file=target.files?.[0];
-    largeVideoSelection=file&&file.size>=LARGE_VIDEO_BYTES?{name:file.name||'video',size:file.size,type:file.type||''}:null;
+    if(file)rememberSelectedFile(file);
     setTimeout(schedule,0);
     return;
   }
@@ -223,6 +271,10 @@ document.addEventListener('click',e=>{
   startAutoSession();
   setTimeout(schedule,80);
 },true);
+
+window.addEventListener('focus',()=>setTimeout(recoverPickerSelection,120));
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)setTimeout(recoverPickerSelection,120)});
+window.addEventListener('pageshow',()=>setTimeout(recoverPickerSelection,120));
 
 const app=document.querySelector('#app')||document.documentElement;
 new MutationObserver(m=>{
