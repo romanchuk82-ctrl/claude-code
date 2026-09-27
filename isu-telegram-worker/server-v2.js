@@ -192,6 +192,48 @@ async function buildNormalContext(videoPath, dir, duration, locator) {
   });
 }
 
+async function identifyJumpTypePanel(videoPath, dir, duration, locator) {
+  const results = [];
+  const jumps = (locator.jumps || []).filter(j => Number.isFinite(Number(j.takeoff)));
+  for (let i = 0; i < jumps.length; i++) {
+    const takeoff = Number(jumps[i].takeoff);
+    const start = Math.max(0, takeoff - 0.55);
+    const length = Math.min(0.85, Math.max(0.45, (duration || takeoff + 0.25) - start));
+    const wide = await extractTimedFrames(videoPath, dir, { start, length, fps: 12, width: 1280, prefix: `identity-wide-${i+1}`, max: 14 });
+    const dense = await extractTimedFrames(videoPath, dir, { start, length, fps: 24, width: 1280, prefix: `identity-dense-${i+1}`, max: 22 });
+    const ask = async (frames, method) => {
+      const content = [{ type: 'input_text', text:
+`ISU Technical Panel subtask: identify JUMP TYPE ONLY for jump ${i+1}. Do not determine revolutions, rotation call or GOE.
+Use the chronological take-off sequence, never the landing pose alone.
+Candidate signatures:
+A: clear forward edge take-off, no toe assist.
+T: backward outside-edge take-off with toe assist by the free foot.
+S: backward inside-edge take-off, no toe assist, free-leg swing.
+Lo: backward outside-edge take-off from the skating foot, no toe assist, typically crossed free leg.
+F: toe-assisted take-off from a backward inside edge.
+Lz: toe-assisted take-off from a backward outside edge.
+If the required signature is not reliably visible, return UNRESOLVED rather than guessing.
+Return JSON only: {"type":"A|T|S|Lo|F|Lz|UNRESOLVED","confidence":0,"toe_assist":"yes|no|unclear","takeoff_direction":"forward|backward|unclear","takeoff_edge":"inside|outside|unclear","evidence":"short","alternatives":["..."]}.
+Method=${method}.` }];
+      for (const f of frames) {
+        content.push({ type: 'input_text', text: `t=${f.time.toFixed(3)}s` });
+        const b64=(await fs.readFile(f.path)).toString('base64');
+        content.push({ type: 'input_image', image_url:`data:image/jpeg;base64,${b64}`, detail:'high' });
+      }
+      const response = await openai.responses.create({ model: MODEL, reasoning:{ effort:'high' }, max_output_tokens:900, input:[{role:'user',content}] });
+      return parseJsonLoose(textFromResponse(response));
+    };
+    const first = await ask(wide, 'wide normal-context mechanics');
+    const second = await ask(dense, 'dense take-off mechanics, independent second opinion');
+    const same = first.type === second.type && first.type !== 'UNRESOLVED';
+    const strong = Number(first.confidence) >= 75 && Number(second.confidence) >= 75;
+    const consensus_type = same && strong ? first.type : 'UNRESOLVED';
+    const alternatives = [...new Set([first.type, second.type, ...(first.alternatives || []), ...(second.alternatives || [])].filter(x => x && x !== 'UNRESOLVED'))].slice(0,3);
+    results.push({ jump:i+1, consensus_type, pass1:first, pass2:second, alternatives });
+  }
+  return results;
+}
+
 async function analyzeJumpClip(videoPath, dir, duration, caption, onProgress) {
   await onProgress('⏳ Аналізую відео… Крок 1/3: знаходжу всі стрибки та їх зв’язок.');
   const sparseFps = duration <= 6 ? 6 : duration <= 15 ? 4 : 3;
@@ -200,18 +242,22 @@ async function analyzeJumpClip(videoPath, dir, duration, caption, onProgress) {
   });
   const locator = await locateJumpStructure(sparse, duration, caption);
 
-  await onProgress('⏳ Аналізую відео… Крок 2/3: готую normal-speed context і dense replay.');
+  await onProgress('⏳ Аналізую відео… Крок 2/4: незалежно перевіряю тип стрибка за take-off mechanics.');
+  const identityPanel = await identifyJumpTypePanel(videoPath, dir, duration, locator);
+  await onProgress('⏳ Аналізую відео… Крок 3/4: готую normal-speed context і dense replay.');
   const normal = await buildNormalContext(videoPath, dir, duration, locator);
   const dense = await buildDenseReplay(videoPath, dir, duration, locator);
 
-  await onProgress('⏳ Аналізую відео… Крок 3/3: Technical Call → GOE за ISU 2026/27.');
+  await onProgress('⏳ Аналізую відео… Крок 4/4: Technical Call → GOE за ISU 2026/27.');
   const content = [{ type: 'input_text', text:
 `${RULES}
 
 MODE: JUMP / ELEMENT ANALYSIS.
 Duration: ${duration.toFixed(2)}s. Caption: ${caption || '(none)'}.
 A first pass located this temporal structure: ${JSON.stringify(locator)}.
-Treat that locator only as navigation, NOT as a technical call. It contains no valid jump-type evidence.
+Independent jump-type panel: ${JSON.stringify(identityPanel)}.
+Treat the locator only as navigation, NOT as a technical call. It contains no valid jump-type evidence.
+For TYPE: if the two identity passes disagree or consensus_type is UNRESOLVED, do NOT force A/T/S/Lo/F/Lz. Report UNRESOLVED and list the supported alternatives.
 Identify jump TYPE independently from the moving take-off sequence first (A/T/S/Lo/F/Lz), then revolutions, then relationship, rotation and edge. Do not infer type from the landing pose.
 First finish the Technical Call independently, then GOE.
 The NORMAL CONTEXT frames represent temporal continuity around the whole element and are for jump relationship/rhythm/take-off context.
