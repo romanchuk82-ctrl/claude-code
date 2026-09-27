@@ -1,3 +1,6 @@
+import { refineJumpType } from './jumpClassifier.js';
+import { estimateGOE as sharedEstimateGOE } from './scoringEngine.js';
+
 let FilesetResolver, PoseLandmarker;
 
 let landmarker;
@@ -7,8 +10,8 @@ const MP_CDN=`https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VERSION}
 
 async function loadVisionModule(){
   const sources=[
-    `${MP_CDN}/vision_bundle.mjs?skate=7`,
-    `https://unpkg.com/@mediapipe/tasks-vision@${MP_VERSION}/vision_bundle.mjs?skate=7`
+    `${MP_CDN}/vision_bundle.mjs?skate=8`,
+    `https://unpkg.com/@mediapipe/tasks-vision@${MP_VERSION}/vision_bundle.mjs?skate=8`
   ];
   let lastError;
   for(const source of sources){
@@ -53,6 +56,7 @@ const deg=r=>r*180/Math.PI;
 
 function getMetrics(frame){
   const l=frame.landmarks?.[0], w=frame.worldLandmarks?.[0]; if(!l||!w)return null;
+  const hipX=(l[23].x+l[24].x)/2;
   const hipY=(l[23].y+l[24].y)/2;
   const ankleY=(l[27].y+l[28].y)/2;
   const shX=(l[11].x+l[12].x)/2, shY=(l[11].y+l[12].y)/2;
@@ -63,7 +67,12 @@ function getMetrics(frame){
   const shoulderWidth=Math.hypot(l[12].x-l[11].x,l[12].y-l[11].y);
   const hipWidth=Math.hypot(l[24].x-l[23].x,l[24].y-l[23].y);
   const conf=avg([l[11].visibility||0,l[12].visibility||0,l[23].visibility||0,l[24].visibility||0,l[27].visibility||0,l[28].visibility||0]);
-  return {hipY,ankleY,axis,yaw,shoulderWidth,hipWidth,conf};
+  const lat={x:w[12].x-w[11].x,y:w[12].y-w[11].y,z:w[12].z-w[11].z};
+  const sm={x:(w[11].x+w[12].x)/2,y:(w[11].y+w[12].y)/2,z:(w[11].z+w[12].z)/2};
+  const hm={x:(w[23].x+w[24].x)/2,y:(w[23].y+w[24].y)/2,z:(w[23].z+w[24].z)/2};
+  const vert={x:sm.x-hm.x,y:sm.y-hm.y,z:sm.z-hm.z};
+  const frontX=lat.y*vert.z-lat.z*vert.y;
+  return {hipX,hipY,ankleY,axis,yaw,shoulderWidth,hipWidth,frontX,conf};
 }
 
 function detectFlight(samples){
@@ -80,6 +89,16 @@ function detectFlight(samples){
   if(end-start<2){start=Math.max(0,peak-2);end=Math.min(n-1,peak+3)}
   const airtime=Math.max(.08,samples[end].t-samples[start].t);
   return {start,end,peak,airtime,amp,baseline};
+}
+
+function takeoffDirection(raw,start){
+  const pre=raw.slice(Math.max(0,start-5),start+1);
+  if(pre.length<3)return .5;
+  const a=pre[0],b=pre.at(-1),dt=Math.max(.05,b.t-a.t);
+  const vx=(b.hipX-a.hipX)/dt;
+  const front=avg(pre.map(x=>x.frontX||0));
+  if(Math.abs(vx)<.018||Math.abs(front)<.015)return .5;
+  return vx*front>0?.72:.28;
 }
 
 export async function analyzeVideo(video,onProgress=()=>{}){
@@ -111,34 +130,16 @@ export async function analyzeVideo(video,onProgress=()=>{}){
   const height=G*flight.airtime*flight.airtime/8;
   const conf=clamp(avg(raw.map(s=>s.conf))*100 - (flight.amp<.012?20:0) - (rotation<.2?15:0),15,98);
   const quality=clamp(Math.round(50+height*60+stability*.22-axis*.7),0,100);
+  const axelLikelihood=takeoffDirection(raw,flight.start);
   onProgress(95);
-  return {airtime:round(flight.airtime,2),height:round(height,2),rotation:round(rotation,2),axis:round(axis,1),stability:Math.round(stability),confidence:Math.round(conf),quality,takeoff:round(raw[flight.start].t,2),landing:round(raw[flight.end].t,2)};
+  return {airtime:round(flight.airtime,2),height:round(height,2),rotation:round(rotation,2),axis:round(axis,1),stability:Math.round(stability),confidence:Math.round(conf),quality,takeoff:round(raw[flight.start].t,2),landing:round(raw[flight.end].t,2),axelLikelihood:round(axelLikelihood,2)};
 }
 function std(a){const m=avg(a);return Math.sqrt(avg(a.map(x=>(x-m)**2)))}
 function round(v,n){const p=10**n;return Math.round(v*p)/p}
 function seek(video,t){return new Promise((resolve,reject)=>{if(Math.abs(video.currentTime-t)<.01)return resolve();const done=()=>{cleanup();resolve()};const err=()=>{cleanup();reject(new Error('Не вдалося прочитати кадр'))};const cleanup=()=>{video.removeEventListener('seeked',done);video.removeEventListener('error',err)};video.addEventListener('seeked',done,{once:true});video.addEventListener('error',err,{once:true});video.currentTime=t})}
 
-const EXPECTED={auto:null,'1T':1,'1S':1,'1Lo':1,'1F':1,'1Lz':1,'1A':1.5,'2T':2,'2S':2,'2Lo':2,'2F':2,'2Lz':2,'2A':2.5,'3T':3,'3S':3,'3Lo':3,'3F':3,'3Lz':3,'3A':3.5};
-export function estimateElement(rotation,selected='auto'){
-  if(selected!=='auto')return selected;
-  let best='1T',dist=99;for(const [k,v] of Object.entries(EXPECTED)){if(!v)continue;const d=Math.abs(v-rotation);if(d<dist){best=k;dist=d}}return best;
+export function estimateElement(rotationOrMetrics,selected='auto',context={}){
+  const metrics=typeof rotationOrMetrics==='number'?{rotation:rotationOrMetrics}:rotationOrMetrics;
+  return refineJumpType(metrics,selected,context).code;
 }
-export function estimateGOE(metrics,element,flags={}){
-  const expected=EXPECTED[element]||Math.max(1,Math.round(metrics.rotation));
-  const deficit=expected-metrics.rotation;
-  let score=0; const reasons=[];
-  if(metrics.height>=.34){score++;reasons.push(['pos','Хороша висота'])} else if(metrics.height<.18){score--;reasons.push(['neg','Низька висота'])} else reasons.push(['neu','Середня висота']);
-  if(metrics.axis<=7){score++;reasons.push(['pos','Стабільна вісь'])} else if(metrics.axis>16){score--;reasons.push(['neg','Помітний нахил осі'])}
-  if(metrics.stability>=82){score++;reasons.push(['pos','Чистий landing'])} else if(metrics.stability<55){score-=2;reasons.push(['neg','Нестабільний landing'])} else if(metrics.stability<70){score--;reasons.push(['neg','Landing потребує контролю'])}
-  if(deficit<=.08){score++;reasons.push(['pos','Rotation близька до повної'])}
-  else if(deficit<=.25){score-=1;reasons.push(['neg','Можливий q / невеликий недокрут'])}
-  else if(deficit<=.5){score-=2;reasons.push(['neg','Ймовірний under-rotation'])}
-  else {score-=4;reasons.push(['neg','Значний недокрут'])}
-  if(flags.hand){score-=1;reasons.push(['neg','Дотик рукою'])}
-  if(flags.twoFoot){score-=2;reasons.push(['neg','Landing на дві ноги'])}
-  if(flags.stepOut){score-=3;reasons.push(['neg','Step-out'])}
-  if(flags.fall){score-=5;reasons.push(['neg','Fall'])}
-  const errorCount=[flags.hand,flags.twoFoot,flags.stepOut,flags.fall,deficit>.25,metrics.stability<55].filter(Boolean).length;
-  if(errorCount>=2)score=Math.min(score,2);
-  return {goe:clamp(Math.round(score),-5,5),reasons,deficit:round(deficit,2),expected};
-}
+export function estimateGOE(metrics,element,flags={}){return sharedEstimateGOE(metrics,element,flags)}
