@@ -6,10 +6,47 @@ let calibratedFirst=false;
 let programTypeChoice='girlsB2526';
 let programTypeInitialized=false;
 const pending=new Map();
+const LARGE_VIDEO_BYTES=60*1024*1024;
+let largeVideoSelection=null;
 
 function setStatus(text){
   const node=document.querySelector('#autoFindStatus');
   if(node&&node.textContent!==text)node.textContent=text;
+}
+
+function humanSize(bytes){
+  const mb=Number(bytes||0)/1024/1024;
+  return `${mb>=100?mb.toFixed(0):mb.toFixed(1)} MB`;
+}
+
+function optimizeVideoElements(){
+  document.querySelectorAll('video').forEach(video=>{
+    // iOS can eagerly buffer a 100+ MB local blob when preload=auto. Metadata is
+    // enough for seeking and for the frame-by-frame analyzers, and keeps memory low.
+    if(video.preload!=='metadata')video.preload='metadata';
+    video.setAttribute('playsinline','');
+    video.setAttribute('webkit-playsinline','');
+    video.disableRemotePlayback=true;
+  });
+}
+
+function ensureLargeVideoNotice(){
+  if(!largeVideoSelection)return;
+  const video=document.querySelector('#video');
+  if(!video)return;
+  optimizeVideoElements();
+  const card=video.closest('.card');
+  if(!card||card.querySelector('[data-large-video-notice]'))return;
+  const note=document.createElement('div');
+  note.dataset.largeVideoNotice='1';
+  note.style.cssText='margin-top:10px;padding:11px 12px;border-radius:13px;background:#eef7ff;color:#24536f;font-size:12px;line-height:1.45;font-weight:800';
+  const duration=Number(video.duration);
+  const d=Number.isFinite(duration)&&duration>0?` · ${Math.floor(duration/60)}:${String(Math.round(duration%60)).padStart(2,'0')}`:'';
+  note.innerHTML=`<b>Велике відео готове${d}</b><br>${humanSize(largeVideoSelection.size)}. SKATE не завантажує файл у хмару й не буферизує його повністю. Для повного виступу використовуй режим «Весь виступ».<button id="openFullProgramFromLarge" type="button" style="display:block;width:100%;margin-top:9px;border:0;border-radius:11px;padding:11px;background:#1785eb;color:#fff;font-weight:900">Відкрити «Весь виступ»</button>`;
+  video.closest('.video-wrap')?.insertAdjacentElement('afterend',note);
+  if(video.readyState<1){
+    video.addEventListener('loadedmetadata',()=>{note.remove();ensureLargeVideoNotice()},{once:true});
+  }
 }
 
 function markerIndex(node){
@@ -130,6 +167,8 @@ function schedule(){
   scheduled=true;
   requestAnimationFrame(()=>{
     scheduled=false;
+    optimizeVideoElements();
+    ensureLargeVideoNotice();
     rehydrateSuggestionState();
     fixCascadeGOEPresentation();
     ensureGirlsBProgramType();
@@ -139,6 +178,12 @@ function schedule(){
 
 document.addEventListener('change',e=>{
   const target=e.target;
+  if(target?.id==='fileLibrary'||target?.id==='fileCamera'){
+    const file=target.files?.[0];
+    largeVideoSelection=file&&file.size>=LARGE_VIDEO_BYTES?{name:file.name||'video',size:file.size,type:file.type||''}:null;
+    setTimeout(schedule,0);
+    return;
+  }
   if(target?.id==='programType'){
     programTypeChoice=String(target.value||'girlsB2526');
     setTimeout(schedule,0);
@@ -168,6 +213,12 @@ document.addEventListener('change',e=>{
 },true);
 
 document.addEventListener('click',e=>{
+  if(e.target?.id==='openFullProgramFromLarge'){
+    e.preventDefault();
+    const go=()=>document.querySelector('#modeProgram')?.click();
+    go();setTimeout(go,120);
+    return;
+  }
   if(e.target?.id!=='autoFindJumps')return;
   startAutoSession();
   setTimeout(schedule,80);
