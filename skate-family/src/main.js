@@ -5,7 +5,7 @@ import { saveAnalysis, getAnalyses } from './db.js';
 let state={
   view:'home',
   file:null,url:null,metrics:null,element:'auto',flags:{hand:false,twoFoot:false,stepOut:false,fall:false},
-  passFile:null,passUrl:null,pass:null,
+  passFile:null,passUrl:null,pass:null,passSelection:[],
   programFile:null,programUrl:null,program:null,programType:'girlsB2526',
   installPrompt:null,installGuide:false
 };
@@ -13,6 +13,7 @@ const el=document.querySelector('#app');
 const isStandalone=window.matchMedia('(display-mode: standalone)').matches || navigator.standalone===true;
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
 const fmtSigned=v=>`${Number(v)>0?'+':''}${Number(v).toFixed(2)}`;
+const JUMP_ELEMENTS=['1T','1S','1Lo','1F','1Lz','1A','2T','2S','2Lo','2F','2Lz','2A','3T','3S','3Lo','3F','3Lz','3A','4T','4S','4Lo','4F','4Lz','4A'];
 
 function render(){
   const views={home,analyze:analyzeView,pass:passView,program:programView,history:historyView};
@@ -56,10 +57,16 @@ function jumpResult(){
 <div class="section-title"><h2>Уточнити landing</h2><span>за потреби</span></div><section class="card"><div class="checks">${[['hand','Дотик рукою'],['twoFoot','Landing на дві ноги'],['stepOut','Step-out'],['fall','Fall']].map(([k,t])=>`<label class="check"><span>${t}</span><input class="switch flag" type="checkbox" data-flag="${k}" ${state.flags[k]?'checked':''}></label>`).join('')}</div><button class="primary" id="save">Зберегти результат</button></section>`;
 }
 
+function cascadeBuilder(){
+  const selected=state.passSelection||[];
+  const chips=selected.length?selected.map((code,i)=>`<div class="cascade-chip"><span class="cascade-order">${i+1}</span><b>${code}</b><div class="cascade-actions"><button data-cascade-left="${i}" ${i===0?'disabled':''}>←</button><button data-cascade-right="${i}" ${i===selected.length-1?'disabled':''}>→</button><button data-cascade-remove="${i}">×</button></div></div>`).join(''):'<div class="cascade-empty">Постав галочки на елементах у потрібному порядку.</div>';
+  return `<div class="section-title compact"><h2>Вибір елементів</h2><span>${selected.length?`обрано ${selected.length}`:'каскад'}</span></div><section class="card cascade-card"><p class="cascade-help">Обери окремі стрибки. Порядок вибору формує каскад.</p><div class="element-check-grid">${JUMP_ELEMENTS.map(code=>{const idx=selected.indexOf(code);return `<label class="element-check ${idx>=0?'selected':''}"><input class="cascade-choice" type="checkbox" value="${code}" ${idx>=0?'checked':''}><span>${code}</span>${idx>=0?`<i>${idx+1}</i>`:''}</label>`}).join('')}</div><div class="my-cascade"><div class="my-cascade-head"><b>Мій каскад</b><span>${selected.length?selected.join(' + '):'ще не обрано'}</span></div><div class="cascade-list">${chips}</div>${selected.length?'<button class="cascade-clear" id="clearCascade">Очистити</button>':''}</div></section>`;
+}
+
 function passView(){
   if(!state.passUrl)return home();
   const result=state.pass?passResult():'';
-  return `<div class="section-title"><h2>Кілька стрибків</h2><span>combo / SEQ</span></div><section class="card"><div class="video-wrap"><video id="passVideo" src="${state.passUrl}" playsinline controls preload="metadata"></video></div><button class="primary" id="runPass">${state.pass?'Проаналізувати заново':'Аналізувати серію'}</button><div id="passProgress" class="progress hidden"><div class="bar"><div id="passBar"></div></div><div class="progress-text" id="passProgressText">Шукаю стрибки…</div></div><p class="notice">Цей режим використовує той самий detector і scoring engine, що й повний виступ.</p></section>${result}`;
+  return `<div class="section-title"><h2>Кілька стрибків</h2><span>combo / SEQ</span></div><section class="card"><div class="video-wrap"><video id="passVideo" src="${state.passUrl}" playsinline controls preload="metadata"></video></div></section>${cascadeBuilder()}<section class="card pass-run-card"><button class="primary" id="runPass">${state.pass?'Проаналізувати заново':'Аналізувати серію'}</button><div id="passProgress" class="progress hidden"><div class="bar"><div id="passBar"></div></div><div class="progress-text" id="passProgressText">Шукаю стрибки…</div></div><p class="notice">Якщо обрано елементи, SKATE використає цей склад каскаду під час фінальної оцінки.</p></section>${result}`;
 }
 
 function passResult(){
@@ -124,6 +131,11 @@ function bind(){
   document.querySelectorAll('.goe-btn').forEach(x=>x.onclick=()=>changeGOE(x.dataset.id,Number(x.dataset.goe)));
   document.querySelectorAll('.pass-select').forEach(x=>x.onchange=()=>updatePassElement(x.dataset.id,{code:x.value,needsConfirm:false}));
   document.querySelectorAll('.pass-goe').forEach(x=>x.onclick=()=>changePassGOE(x.dataset.id,Number(x.dataset.goe)));
+  document.querySelectorAll('.cascade-choice').forEach(x=>x.onchange=()=>toggleCascadeElement(x.value,x.checked));
+  document.querySelectorAll('[data-cascade-remove]').forEach(x=>x.onclick=()=>removeCascadeElement(Number(x.dataset.cascadeRemove)));
+  document.querySelectorAll('[data-cascade-left]').forEach(x=>x.onclick=()=>moveCascadeElement(Number(x.dataset.cascadeLeft),-1));
+  document.querySelectorAll('[data-cascade-right]').forEach(x=>x.onclick=()=>moveCascadeElement(Number(x.dataset.cascadeRight),1));
+  document.querySelector('#clearCascade')?.addEventListener('click',()=>{state.passSelection=[];render()});
   document.querySelectorAll('[data-fall]').forEach(x=>x.onclick=()=>{state.program.fallCount=clamp((state.program.fallCount||0)+Number(x.dataset.fall),0,10);render()});
   document.querySelectorAll('[data-seek]').forEach(x=>x.onclick=()=>seekAndPlay('#programVideo',x.dataset.seek));
   document.querySelectorAll('[data-passseek]').forEach(x=>x.onclick=()=>seekAndPlay('#passVideo',x.dataset.passseek));
@@ -132,7 +144,7 @@ function bind(){
 }
 
 function chooseJumpFile(file){if(!file)return;if(state.url)URL.revokeObjectURL(state.url);state.file=file;state.url=URL.createObjectURL(file);state.metrics=null;state.element='auto';state.flags={hand:false,twoFoot:false,stepOut:false,fall:false};state.view='analyze';render()}
-function choosePassFile(file){if(!file)return;if(state.passUrl)URL.revokeObjectURL(state.passUrl);state.passFile=file;state.passUrl=URL.createObjectURL(file);state.pass=null;state.view='pass';render()}
+function choosePassFile(file){if(!file)return;if(state.passUrl)URL.revokeObjectURL(state.passUrl);state.passFile=file;state.passUrl=URL.createObjectURL(file);state.pass=null;state.passSelection=[];state.view='pass';render()}
 function chooseProgramFile(file){if(!file)return;if(state.programUrl)URL.revokeObjectURL(state.programUrl);state.programFile=file;state.programUrl=URL.createObjectURL(file);state.program=null;state.view='program';render()}
 
 async function runAnalysis(){
@@ -141,7 +153,7 @@ async function runAnalysis(){
 }
 async function runPassAnalysis(){
   const v=document.querySelector('#passVideo'),box=document.querySelector('#passProgress'),bar=document.querySelector('#passBar'),txt=document.querySelector('#passProgressText'),btn=document.querySelector('#runPass');if(!v)return;
-  try{btn.disabled=true;box.classList.remove('hidden');await waitMeta(v);state.pass=await analyzeJumpPass(v,p=>{bar.style.width=`${p}%`;txt.textContent=p<60?'Шукаю всі take-off…':p<92?'Відрізняю окремі стрибки від combo / SEQ…':'Рахую BV і GOE…'});bar.style.width='100%';setTimeout(render,180)}catch(e){toast(e.message||'Помилка аналізу серії');btn.disabled=false;box.classList.add('hidden')}
+  try{btn.disabled=true;box.classList.remove('hidden');await waitMeta(v);state.pass=await analyzeJumpPass(v,p=>{bar.style.width=`${p}%`;txt.textContent=p<60?'Шукаю всі take-off…':p<92?'Відрізняю окремі стрибки від combo / SEQ…':'Рахую BV і GOE…'});applyCascadeSelection();bar.style.width='100%';setTimeout(render,180)}catch(e){toast(e.message||'Помилка аналізу серії');btn.disabled=false;box.classList.add('hidden')}
 }
 async function runProgramAnalysis(){
   const v=document.querySelector('#programVideo'),box=document.querySelector('#programProgress'),bar=document.querySelector('#programBar'),txt=document.querySelector('#programProgressText'),btn=document.querySelector('#runProgram');if(!v)return;
@@ -153,6 +165,22 @@ function seekAndPlay(sel,t){const v=document.querySelector(sel);if(v){v.currentT
 function updateProgramElement(id,patch){const x=state.program?.elements?.find(e=>e.id===id);if(!x)return;Object.assign(x,patch);render()}
 function changeGOE(id,delta){const x=state.program?.elements?.find(e=>e.id===id);if(!x)return;const g=Number.isFinite(Number(x.goeGrade))?Number(x.goeGrade):Number(x.goe)||0;x.goeGrade=clamp(g+delta,-5,5);x.goe=x.goeGrade;render()}
 function addProgramElement(){if(!state.program)return;state.program.elements.push({id:crypto.randomUUID(),kind:'manual',time:state.program.duration,code:'StSq1',suggestion:'manual',goe:0,goeGrade:0,confidence:100,needsConfirm:false,metrics:{}});render()}
+function toggleCascadeElement(code,checked){
+  const list=[...(state.passSelection||[])];
+  const i=list.indexOf(code);
+  if(checked&&i<0)list.push(code);
+  if(!checked&&i>=0)list.splice(i,1);
+  state.passSelection=list.slice(0,3);
+  render();
+}
+function removeCascadeElement(i){if(i<0)return;state.passSelection.splice(i,1);render()}
+function moveCascadeElement(i,delta){const j=i+delta;if(i<0||j<0||j>=state.passSelection.length)return;[state.passSelection[i],state.passSelection[j]]=[state.passSelection[j],state.passSelection[i]];render()}
+function applyCascadeSelection(){
+  const sel=state.passSelection||[];if(!sel.length||!state.pass)return;
+  const code=sel.join('+');const passes=state.pass.passes||[];
+  if(passes.length){passes[0].code=code;passes[0].needsConfirm=false;passes[0].suggestion='обрано користувачем';}
+  else state.pass.passes=[{id:crypto.randomUUID(),kind:'jump-pass',time:0,code,suggestion:'обрано користувачем',goe:0,goeGrade:0,confidence:100,needsConfirm:false,metrics:{members:[]}}];
+}
 function updatePassElement(id,patch){const x=state.pass?.passes?.find(e=>e.id===id);if(!x)return;Object.assign(x,patch);render()}
 function changePassGOE(id,delta){const x=state.pass?.passes?.find(e=>e.id===id);if(!x)return;const g=Number.isFinite(Number(x.goeGrade))?Number(x.goeGrade):Number(x.goe)||0;x.goeGrade=clamp(g+delta,-5,5);x.goe=x.goeGrade;render()}
 
