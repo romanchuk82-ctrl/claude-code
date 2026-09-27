@@ -38,4 +38,18 @@ jobs:
 
       - name: Deploy to Cloudflare Pages
         shell: bash
-        run: npx --yes wrangler@4.141.0 pages deploy skate-family --project-name=skate-family --branch=skate-cloudflare
+        run: npx --yes wrangler@4.141.0 pages deploy skate-family --project-name=skate-family --branch=skate-cloudflare --commit-dirty=true
+
+      - name: Verify Cloudflare Pages deployment
+        shell: bash
+        run: |
+          set -euo pipefail
+          for path in / /manifest.webmanifest /sw.js /icons/skate-180-v7.png; do
+            echo "Checking ${path}"
+            curl --fail --silent --show-error --location --retry 6 --retry-delay 2 --retry-all-errors \
+              --output /tmp/skate-check "https://skate-family.pages.dev${path}"
+            test -s /tmp/skate-check
+          done
+          curl --fail --silent --show-error --location --retry 6 --retry-delay 2 --retry-all-errors \
+            https://skate-family.pages.dev/ | grep -q 'SKATE'
+          echo 'SKATE Cloudflare Pages verification passed.'
