@@ -211,7 +211,7 @@ function inferJumpTypeFromMechanics(o) {
   const dir = o?.takeoff_direction;
   const toe = o?.toe_assist;
   const edge = o?.takeoff_edge;
-  const take = o?.takeoff_foot;
+  const take = o?.skating_foot;
   const land = o?.landing_foot;
   const free = o?.free_leg_action;
   if (dir === 'forward' && toe === 'no') return edge === 'outside' || edge === 'unclear' ? 'A' : 'UNRESOLVED';
@@ -234,19 +234,19 @@ async function identifyJumpTypePanel(videoPath, dir, duration, locator) {
   for (let i = 0; i < jumps.length; i++) {
     const takeoff = Number(jumps[i].takeoff);
     const landing = Number(jumps[i].landing || takeoff + 0.7);
-    const wideStart = Math.max(0, takeoff - 0.9);
+    const wideStart = Math.max(0, takeoff - 1.25);
     const wideEnd = Math.min(duration || landing + 0.45, landing + 0.45);
-    const takeStart = Math.max(0, takeoff - 0.5);
-    const wide = await extractTimedFrames(videoPath, dir, { start:wideStart, length:Math.max(0.8,wideEnd-wideStart), fps:10, width:1280, prefix:`identity-wide-${i+1}`, max:24 });
-    const dense = await extractTimedFrames(videoPath, dir, { start:takeStart, length:0.75, fps:24, width:1280, prefix:`identity-dense-${i+1}`, max:20 });
+    const takeStart = Math.max(0, takeoff - 0.85);
+    const wide = await extractTimedFrames(videoPath, dir, { start:wideStart, length:Math.max(0.8,wideEnd-wideStart), fps:15, width:1280, prefix:`identity-wide-${i+1}`, max:24 });
+    const dense = await extractTimedFrames(videoPath, dir, { start:takeStart, length:1.10, fps:30, width:1280, prefix:`identity-dense-${i+1}`, max:20 });
     const ask = async (frames, method) => {
       const content=[{type:'input_text',text:
 `ISU Technical Panel mechanics subtask for jump ${i+1}. OBSERVE mechanics only; do not name the jump and do not assess revolutions/GOE.
 Return JSON only with:
-{"takeoff_direction":"forward|backward|unclear","toe_assist":"yes|no|unclear","takeoff_edge":"inside|outside|unclear","takeoff_foot":"left|right|unclear","landing_foot":"left|right|unclear","free_leg_action":"swing|crossed|held|unclear","confidence":0,"evidence":"short chronological evidence"}.
-Use chronological motion. Take-off direction means direction of travel immediately before leaving the ice, not body facing. Toe assist means a distinct toe-pick plant of the free foot. If a feature is not reliably visible, use unclear. Method=${method}.` }];
+{"takeoff_direction":"forward|backward|unclear","toe_assist":"yes|no|unclear","takeoff_edge":"inside|outside|unclear","skating_foot":"left|right|unclear","toe_pick_foot":"left|right|none|unclear","landing_foot":"left|right|unclear","free_leg_action":"swing|crossed|held|unclear","confidence":0,"evidence":"short chronological evidence"}.
+Use chronological motion. Take-off direction means blade travel immediately before leaving the ice, inferred across consecutive frames, never torso facing. Toe assist means a distinct toe-pick plant by the free foot. skating_foot means the foot gliding on the take-off edge; toe_pick_foot is the separate picking foot. For Lutz vs toe loop this distinction is mandatory. If a feature is not reliably visible, use unclear. Method=${method}.` }];
       for (const f of frames) { content.push({type:'input_text',text:`t=${f.time.toFixed(3)}s`}); const b64=(await fs.readFile(f.path)).toString('base64'); content.push({type:'input_image',image_url:`data:image/jpeg;base64,${b64}`,detail:'high'}); }
-      return await createJsonResponse([{role:'user',content}], {label:`jump-mechanics-${i+1}-${method}`,primaryEffort:'high',primaryTokens:1100}) || {takeoff_direction:'unclear',toe_assist:'unclear',takeoff_edge:'unclear',takeoff_foot:'unclear',landing_foot:'unclear',free_leg_action:'unclear',confidence:0,evidence:'unresolved'};
+      return await createJsonResponse([{role:'user',content}], {label:`jump-mechanics-${i+1}-${method}`,primaryEffort:'high',primaryTokens:1100}) || {takeoff_direction:'unclear',toe_assist:'unclear',takeoff_edge:'unclear',skating_foot:'unclear',toe_pick_foot:'unclear',landing_foot:'unclear',free_leg_action:'unclear',confidence:0,evidence:'unresolved'};
     };
     const first=await ask(wide,'full jump context including landing');
     const second=await ask(dense,'dense take-off sequence');
