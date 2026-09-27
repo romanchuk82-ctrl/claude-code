@@ -1,4 +1,4 @@
-const CACHE='skate-v32';
+const CACHE='skate-v33';
 const ASSETS=[
   '/',
   '/manifest.webmanifest?v=6',
@@ -7,7 +7,7 @@ const ASSETS=[
   '/icons/skate-512-v6.png',
   '/src/main-v11.js?v=15',
   '/src/cascade-presets.js?v=21',
-  '/src/suggestion-calibration.js?v=23',
+  '/src/suggestion-calibration.js?v=27',
   '/src/scoringEngine.js?v=25',
   '/src/jumpClassifier.js?v=25',
   '/src/programJudge.js?v=2',
@@ -45,7 +45,7 @@ self.addEventListener('fetch',e=>{
   }
 
   e.respondWith(
-    fetch(e.request)
+    fetch(e.request,{cache:'no-store'})
       .then(r=>{
         if(r.ok){
           const copy=r.clone();
