@@ -181,7 +181,7 @@ The NORMAL CONTEXT frames represent temporal continuity around the whole element
 The DENSE REPLAY frames are 24 fps around each located jump and are the primary evidence for landing blade rotation and slow review.
 Do not claim exact q/<</edge if the blade or first actual ice contact is not reliably visible.
 For a combination/sequence: analyze every jump technically, but assign ONE GOE to the whole element.
-Follow OUTPUT FORMAT A/B/C/I style from the canonical rules and keep the response concise enough for Telegram.` }];
+Use emoji section headings such as 🔎 TECHNICAL CALL, 📊 GOE, 🔁 ALTERNATIVE CALL, ⚠️ ОБМЕЖЕННЯ. Do not use Markdown asterisks. Keep the response concise enough for Telegram.` }];
 
   for (const f of normal) {
     content.push({ type: 'input_text', text: `NORMAL CONTEXT t=${f.time.toFixed(3)}s` });
@@ -243,15 +243,54 @@ function chunkTelegramText(text, limit = 3800) {
   return chunks;
 }
 
+function sanitizeTelegramText(text) {
+  return String(text || '')
+    .replace(/\*\*/g, '')
+    .replace(/^#{1,4}\s*/gm, '')
+    .replace(/^[-*]\s+/gm, '• ')
+    .replace(/^A\.\s*Technical call:?/gmi, '🔎 TECHNICAL CALL')
+    .replace(/^B\.\s*GOE:?/gmi, '📊 GOE')
+    .replace(/^C\.\s*Alternative call:?/gmi, '🔁 ALTERNATIVE CALL')
+    .replace(/^I\.\s*(Limitation|Обмеження):?/gmi, '⚠️ ОБМЕЖЕННЯ')
+    .trim();
+}
+
+async function buildParentSummary(resultText) {
+  const response = await openai.responses.create({
+    model: MODEL,
+    reasoning: { effort: 'low' },
+    max_output_tokens: 500,
+    input: [{ role: 'user', content: [{ type: 'input_text', text: `Based ONLY on the completed ISU analysis below, write a short Ukrainian summary for parents. Do not make a new technical call and do not invent facts. Use exactly this visual structure, with no Markdown asterisks:
+👨‍👩‍👧 ПІДСУМОК ДЛЯ БАТЬКІВ
+⛸ Елемент: ...
+✅/⚠️/❌/❓ Виконання: ...
+🎯 Що покращити: ...
+💡 Простими словами: ...
+If the technical result is uncertain, use ❓ or ⚠️ and say what is uncertain. Keep it to 4-6 short lines.
+
+ISU analysis:
+${resultText}` }] }]
+  });
+  return sanitizeTelegramText(textFromResponse(response));
+}
+
 async function deliverResult(chatId, originalMessageId, progressId, resultText) {
-  const chunks = chunkTelegramText(`⛸ ISU Judge 2026/27\n\n${resultText}`);
+  const clean = sanitizeTelegramText(resultText);
+  const chunks = chunkTelegramText(`⛸️ ISU Judge 2026/27\n\n${clean}`);
   await tg('editMessageText', { chat_id: chatId, message_id: progressId, text: chunks[0] });
   for (let i = 1; i < chunks.length; i++) {
     await tg('sendMessage', {
-      chat_id: chatId, text: `Продовження ${i + 1}/${chunks.length}\n\n${chunks[i]}`,
+      chat_id: chatId, text: `📄 Продовження ${i + 1}/${chunks.length}\n\n${chunks[i]}`,
       reply_to_message_id: originalMessageId, allow_sending_without_reply: true
     });
   }
+  try {
+    const parentSummary = await buildParentSummary(clean);
+    if (parentSummary) await tg('sendMessage', {
+      chat_id: chatId, text: parentSummary,
+      reply_to_message_id: originalMessageId, allow_sending_without_reply: true
+    });
+  } catch (e) { console.error('parent summary error', e); }
 }
 
 async function processVideoMessage(msg, video) {
