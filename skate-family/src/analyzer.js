@@ -1,5 +1,5 @@
 import { refineJumpType } from './jumpClassifier.js';
-import { estimateGOE as sharedEstimateGOE } from './scoringEngine.js';
+import { estimateGOE as sharedEstimateGOE } from './scoringEngine.js?v=13';
 
 let FilesetResolver, PoseLandmarker;
 let landmarker;
@@ -8,7 +8,7 @@ const MP_VERSION='0.10.22';
 const MP_CDN=`https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VERSION}`;
 
 async function loadVisionModule(){
-  const sources=[`${MP_CDN}/vision_bundle.mjs?skate=11`,`https://unpkg.com/@mediapipe/tasks-vision@${MP_VERSION}/vision_bundle.mjs?skate=11`];
+  const sources=[`${MP_CDN}/vision_bundle.mjs?skate=12`,`https://unpkg.com/@mediapipe/tasks-vision@${MP_VERSION}/vision_bundle.mjs?skate=12`];
   let lastError;
   for(const source of sources){try{const mod=await import(source);if(mod?.FilesetResolver&&mod?.PoseLandmarker)return mod}catch(err){lastError=err;console.warn('MediaPipe module source failed',source,err)}}
   console.error('MediaPipe module load failed',lastError);throw new Error('Не вдалося завантажити модуль аналізу. Перевір інтернет і спробуй ще раз.');
@@ -50,12 +50,17 @@ function crossingTime(samples,ys,a,b,thr){
 function nearestTimeIndex(samples,target){
   let best=0,d=Infinity;for(let i=0;i<samples.length;i++){const x=Math.abs(samples[i].t-target);if(x<d){d=x;best=i}}return best;
 }
-function detrendedStd(a){
+function robustStd(a){
   if(!a.length)return 0;if(a.length<3)return std(a);
+  const m=med(a),mad=med(a.map(v=>Math.abs(v-m)));
+  return mad*1.4826;
+}
+function detrendedStd(a){
+  if(!a.length)return 0;if(a.length<3)return robustStd(a);
   const n=a.length,mx=(n-1)/2,my=avg(a);let num=0,den=0;
   for(let i=0;i<n;i++){num+=(i-mx)*(a[i]-my);den+=(i-mx)**2}
   const slope=den?num/den:0,intercept=my-slope*mx;
-  return std(a.map((v,i)=>v-(intercept+slope*i)));
+  return robustStd(a.map((v,i)=>v-(intercept+slope*i)));
 }
 function detectFlight(samples){
   const ys=smooth(samples.map(s=>s.hipY),2),n=ys.length,edge=Math.max(3,Math.floor(n*.18));
@@ -109,8 +114,7 @@ function landingBladeCue(raw,landingT){
   const f=feet[0],bx=f.tx-f.ax,by=f.ty-f.ay,blade=Math.hypot(bx,by);
   if(travel<.006||blade<.008)return {landingBladeDeficit:null,landingBladeConfidence:0,landingFoot:f.side};
   const dot=clamp((bx*vx+by*vy)/(blade*travel),-1,1),angle=Math.acos(dot);
-  // A normal jump lands travelling backward, so the toe direction should be roughly
-  // opposite the post-landing travel vector. Angular distance from 180° is our blade cue.
+  // This is only an alignment cue, not a literal q/< rotation measurement.
   const deficit=Math.abs(Math.PI-angle)/(2*Math.PI);
   const confidence=clamp(Math.round((f.conf||at.conf)*58+Math.min(1,travel/.035)*24+Math.min(1,blade/.035)*18),15,96);
   return {landingBladeDeficit:round(deficit,2),landingBladeConfidence:confidence,landingFoot:f.side};
@@ -125,10 +129,13 @@ export async function analyzeVideo(video,onProgress=()=>{}){
   const signedRotation=(yaws.at(-1)-yaws[0])/(2*Math.PI),rotation=Math.abs(signedRotation),axis=avg(segment.map(s=>s.axis));
   const landingWindow=raw.filter(s=>s.t>=flight.landingT&&s.t<=flight.landingT+.50);
   const lw=landingWindow.length>=3?landingWindow:raw.slice(flight.end,Math.min(raw.length,flight.end+Math.max(4,Math.round(.5/step))));
-  const axisLanding=avg(lw.map(s=>s.axis));
-  const leanPenalty=Math.max(0,axisLanding-14)*1.15;
-  const hipNoise=detrendedStd(lw.map(s=>s.hipY)),pathNoise=detrendedStd(lw.map(s=>s.hipX)),axisNoise=std(lw.map(s=>s.axis));
-  const stability=clamp(100-(leanPenalty+hipNoise*850+pathNoise*650+axisNoise*.55),0,100);
+  const axisLanding=med(lw.map(s=>s.axis));
+  const leanPenalty=Math.max(0,axisLanding-18)*.75;
+  const hipNoise=detrendedStd(lw.map(s=>s.hipY)),pathNoise=detrendedStd(lw.map(s=>s.hipX)),axisNoise=robustStd(lw.map(s=>s.axis));
+  // Knee absorption and a smooth curved exit are normal. Penalise only residual
+  // jitter after trend removal, and use robust spread so one bad pose frame cannot
+  // turn a controlled landing into 30-40% stability.
+  const stability=clamp(100-(leanPenalty+hipNoise*560+pathNoise*360+axisNoise*.28),0,100);
   const height=G*flight.airtime*flight.airtime/8;
   const rotReliability=rotationReliability(segment,yaws),bladeCue=landingBladeCue(raw,flight.landingT);
   const conf=clamp(avg(raw.map(s=>s.conf))*100-(flight.amp<.012?20:0)-(rotation<.2?15:0),15,98),quality=clamp(Math.round(50+height*60+stability*.22-axis*.7),0,100);
