@@ -18,6 +18,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Validate scoring benchmark
+        shell: bash
+        run: |
+          node --experimental-default-type=module -e "import('./skate-family/src/scoringEngine.js').then(m=>{const r=m.runScoringBenchmark(); console.log(JSON.stringify({ok:r.ok,base:r.base,tes:r.tes,pcs:r.pcs,total:r.total,expected:r.expected},null,2)); if(!r.ok) process.exit(1)})"
+          node --experimental-default-type=module -e "import('./skate-family/src/programJudge.js').then(m=>{const r=m.runScoringBenchmark(); if(!r.ok) process.exit(1); console.log('programJudge shared engine OK')})"
+
       - name: Normalize Cloudflare API token
         shell: bash
         env:
@@ -44,13 +50,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for path in / /manifest.webmanifest /sw.js /icons/skate-180-v7.png; do
+          for path in / /manifest.webmanifest /sw.js /icons/skate-180-v7.png /src/scoringEngine.js /src/jumpClassifier.js /src/programJudge.js; do
             echo "Checking ${path}"
             curl --fail --silent --show-error --location --retry 6 --retry-delay 2 --retry-all-errors \
-              --output /tmp/skate-check "https://skate-family.pages.dev${path}"
+              --output /tmp/skate-check "https://skate-family.pages.dev${path}?deploy=${GITHUB_SHA}"
             test -s /tmp/skate-check
           done
           curl --fail --silent --show-error --location --retry 6 --retry-delay 2 --retry-all-errors \
-            --output /tmp/skate-index https://skate-family.pages.dev/
+            --output /tmp/skate-index "https://skate-family.pages.dev/?deploy=${GITHUB_SHA}"
           grep -q 'SKATE' /tmp/skate-index
+          curl --fail --silent --show-error --location --retry 6 --retry-delay 2 --retry-all-errors \
+            --output /tmp/skate-scoring "https://skate-family.pages.dev/src/scoringEngine.js?deploy=${GITHUB_SHA}"
+          grep -q 'SONYA_MAY_2026_BENCHMARK' /tmp/skate-scoring
           echo 'SKATE Cloudflare Pages verification passed.'
