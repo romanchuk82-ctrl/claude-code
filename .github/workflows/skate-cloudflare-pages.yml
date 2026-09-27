@@ -74,5 +74,5 @@ jobs:
           wait_contains https://skate-family.pages.dev/src/analyzer.js "MP_VERSION='0.10.21'" /tmp/skate-analyzer
           wait_contains https://skate-family.pages.dev/src/analyzer.js 'monotonicPoseTimestamp' /tmp/skate-analyzer-clock
           wait_contains https://skate-family.pages.dev/src/scoringEngine.js 'SONYA_MAY_2026_BENCHMARK' /tmp/skate-engine
-          wait_contains https://skate-family.pages.dev/src/programJudgeUnified.js 'shared-ijs-v3-unified' /tmp/skate-unified
+          wait_contains https://skate-family.pages.dev/src/programJudgeUnified.js 'shared-ijs-v4-calibrated' /tmp/skate-unified
           echo 'SKATE Cloudflare Pages production verification passed.'
