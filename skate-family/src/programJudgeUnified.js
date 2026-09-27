@@ -2,7 +2,7 @@ import {
   analyzeProgram as analyzeProgramBase,
   analyzeJumpPass as analyzeJumpPassBase,
   scoreProgram,scoreJumpPass,PROGRAM_TYPES,ELEMENT_OPTIONS,formatTime
-} from './programJudge.js';
+} from './programJudge.js?base=1';
 import { classifyJump, groupJumpPasses } from './jumpClassifier.js';
 import { estimateGOE } from './scoringEngine.js';
 
