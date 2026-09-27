@@ -1,4 +1,4 @@
-const CACHE='skate-v31';
+const CACHE='skate-v32';
 const ASSETS=[
   '/',
   '/manifest.webmanifest?v=6',
@@ -8,12 +8,16 @@ const ASSETS=[
   '/src/main-v11.js?v=15',
   '/src/cascade-presets.js?v=21',
   '/src/suggestion-calibration.js?v=23',
+  '/src/scoringEngine.js?v=25',
+  '/src/jumpClassifier.js?v=25',
   '/src/programJudge.js?v=2',
+  '/src/programJudge-core.js?v=25',
   '/src/jump-detector.js?v=18',
   '/src/style.css?v=5',
   '/src/analyzer.js?v=14',
-  '/skate-family/src/analyzer.js?v=9',
+  '/src/analyzer-core.js?v=25',
   '/src/multi-analyzer.js?v=15',
+  '/src/multi-analyzer-core.js?v=25',
   '/src/fall-model.js?v=15',
   '/src/cascade-score.js?v=14',
   '/skate-family/models/fall_detection_transformer.tflite',
@@ -28,7 +32,7 @@ self.addEventListener('install',e=>{
 self.addEventListener('activate',e=>e.waitUntil(Promise.all([
   self.clients.claim(),
   caches.keys().then(keys=>Promise.all(keys.filter(k=>k!==CACHE).map(k=>caches.delete(k))))
-]));
+])));
 
 self.addEventListener('fetch',e=>{
   if(e.request.method!=='GET')return;
