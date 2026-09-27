@@ -8,7 +8,7 @@ const MP_VERSION='0.10.22';
 const MP_CDN=`https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VERSION}`;
 
 async function loadVisionModule(){
-  const sources=[`${MP_CDN}/vision_bundle.mjs?skate=10`,`https://unpkg.com/@mediapipe/tasks-vision@${MP_VERSION}/vision_bundle.mjs?skate=10`];
+  const sources=[`${MP_CDN}/vision_bundle.mjs?skate=11`,`https://unpkg.com/@mediapipe/tasks-vision@${MP_VERSION}/vision_bundle.mjs?skate=11`];
   let lastError;
   for(const source of sources){try{const mod=await import(source);if(mod?.FilesetResolver&&mod?.PoseLandmarker)return mod}catch(err){lastError=err;console.warn('MediaPipe module source failed',source,err)}}
   console.error('MediaPipe module load failed',lastError);throw new Error('Не вдалося завантажити модуль аналізу. Перевір інтернет і спробуй ще раз.');
@@ -38,7 +38,8 @@ function getMetrics(frame){
   const conf=avg([l[0],l[11],l[12],l[23],l[24],l[27],l[28],l[31],l[32]].map(p=>p?.visibility||0));
   return {hipX,hipY,shoulderX,shoulderY,noseX:l[0].x,axis,yaw,shoulderWidth,hipWidth,conf,
     leftAnkleX:l[27].x,leftAnkleY:l[27].y,rightAnkleX:l[28].x,rightAnkleY:l[28].y,
-    leftToeX:l[31].x,leftToeY:l[31].y,rightToeX:l[32].x,rightToeY:l[32].y};
+    leftToeX:l[31].x,leftToeY:l[31].y,rightToeX:l[32].x,rightToeY:l[32].y,
+    leftFootConf:avg([l[27],l[31]].map(p=>p?.visibility||0)),rightFootConf:avg([l[28],l[32]].map(p=>p?.visibility||0))};
 }
 
 function crossingTime(samples,ys,a,b,thr){
@@ -68,8 +69,6 @@ function detectFlight(samples){
   const coreEnd=lastInside<n-1?crossingTime(samples,ys,lastInside,lastInside+1,thr):samples[lastInside].t;
   const ratio=amp>.0001?clamp(rise/amp,.12,.60):.28;
   const coreDuration=Math.max(.06,coreEnd-coreStart);
-  // Crossing a fraction of a ballistic parabola is shorter than true blade-off/blade-on
-  // time. Reconstruct the full airtime instead of adding one whole sample at each side.
   const airtime=clamp(coreDuration/Math.sqrt(Math.max(.20,1-ratio)),.10,.90);
   const peakT=samples[peak].t;
   const takeoffT=clamp(peakT-airtime/2,samples[0].t,peakT);
@@ -98,10 +97,27 @@ function rotationReliability(segment,yaws){
   const widthNoise=detrendedStd(segment.map(s=>s.shoulderWidth));
   return clamp(Math.round(visibility*.48+consistency*44-widthNoise*450+4),20,97);
 }
+function landingBladeCue(raw,landingT){
+  const i=nearestTimeIndex(raw,landingT),at=raw[i];
+  const future=raw.filter(s=>s.t>=landingT+.08&&s.t<=landingT+.45),end=future.at(-1);
+  if(!at||!end)return {landingBladeDeficit:null,landingBladeConfidence:0,landingFoot:null};
+  const vx=end.hipX-at.hipX,vy=end.hipY-at.hipY,travel=Math.hypot(vx,vy);
+  const feet=[
+    {side:'L',ax:at.leftAnkleX,ay:at.leftAnkleY,tx:at.leftToeX,ty:at.leftToeY,conf:at.leftFootConf||0},
+    {side:'R',ax:at.rightAnkleX,ay:at.rightAnkleY,tx:at.rightToeX,ty:at.rightToeY,conf:at.rightFootConf||0}
+  ].sort((a,b)=>((b.ay+b.ty)/2)-((a.ay+a.ty)/2));
+  const f=feet[0],bx=f.tx-f.ax,by=f.ty-f.ay,blade=Math.hypot(bx,by);
+  if(travel<.006||blade<.008)return {landingBladeDeficit:null,landingBladeConfidence:0,landingFoot:f.side};
+  const dot=clamp((bx*vx+by*vy)/(blade*travel),-1,1),angle=Math.acos(dot);
+  // A normal jump lands travelling backward, so the toe direction should be roughly
+  // opposite the post-landing travel vector. Angular distance from 180° is our blade cue.
+  const deficit=Math.abs(Math.PI-angle)/(2*Math.PI);
+  const confidence=clamp(Math.round((f.conf||at.conf)*58+Math.min(1,travel/.035)*24+Math.min(1,blade/.035)*18),15,96);
+  return {landingBladeDeficit:round(deficit,2),landingBladeConfidence:confidence,landingFoot:f.side};
+}
 
 export async function analyzeVideo(video,onProgress=()=>{}){
   const pose=await initPose(),duration=Math.min(video.duration||0,15);if(!duration||duration<.4)throw new Error('Відео занадто коротке');
-  // 25 fps sampling on short clips materially improves take-off/landing timing.
   const step=duration<=6?.04:duration<=10?.06:.08,times=[];for(let t=0;t<=duration;t+=step)times.push(Math.min(t,duration-.001));
   const raw=[];for(let i=0;i<times.length;i++){const t=times[i];await seek(video,t);const res=pose.detectForVideo(video,Math.round(t*1000)),m=getMetrics(res);if(m)raw.push({t,...m});onProgress(Math.round((i+1)/times.length*88))}
   if(raw.length<8)throw new Error('Не вдалося стабільно побачити фігуру. Спробуй відео, де все тіло в кадрі.');
@@ -110,16 +126,14 @@ export async function analyzeVideo(video,onProgress=()=>{}){
   const landingWindow=raw.filter(s=>s.t>=flight.landingT&&s.t<=flight.landingT+.50);
   const lw=landingWindow.length>=3?landingWindow:raw.slice(flight.end,Math.min(raw.length,flight.end+Math.max(4,Math.round(.5/step))));
   const axisLanding=avg(lw.map(s=>s.axis));
-  // Do not treat a normal knee bend, camera approach, or changing shoulder width as a
-  // landing error. Penalise only lean and residual wobble after removing the travel trend.
   const leanPenalty=Math.max(0,axisLanding-14)*1.15;
   const hipNoise=detrendedStd(lw.map(s=>s.hipY)),pathNoise=detrendedStd(lw.map(s=>s.hipX)),axisNoise=std(lw.map(s=>s.axis));
   const stability=clamp(100-(leanPenalty+hipNoise*850+pathNoise*650+axisNoise*.55),0,100);
   const height=G*flight.airtime*flight.airtime/8;
-  const rotReliability=rotationReliability(segment,yaws);
+  const rotReliability=rotationReliability(segment,yaws),bladeCue=landingBladeCue(raw,flight.landingT);
   const conf=clamp(avg(raw.map(s=>s.conf))*100-(flight.amp<.012?20:0)-(rotation<.2?15:0),15,98),quality=clamp(Math.round(50+height*60+stability*.22-axis*.7),0,100);
   const takeoff=takeoffFeatures(raw,flight.start,signedRotation);onProgress(95);
-  return {airtime:round(flight.airtime,2),height:round(height,2),rotation:round(rotation,2),rotationSigned:round(signedRotation,2),rotationReliability:rotReliability,axis:round(axis,1),stability:Math.round(stability),confidence:Math.round(conf),quality,takeoff:round(flight.takeoffT,2),landing:round(flight.landingT,2),flightSignal:round(flight.amp,3),...takeoff};
+  return {airtime:round(flight.airtime,2),height:round(height,2),rotation:round(rotation,2),rotationSigned:round(signedRotation,2),rotationReliability:rotReliability,axis:round(axis,1),stability:Math.round(stability),confidence:Math.round(conf),quality,takeoff:round(flight.takeoffT,2),landing:round(flight.landingT,2),flightSignal:round(flight.amp,3),...bladeCue,...takeoff};
 }
 function std(a){const m=avg(a);return Math.sqrt(avg(a.map(x=>(x-m)**2)))}
 function round(v,n){const p=10**n;return Math.round(v*p)/p}
