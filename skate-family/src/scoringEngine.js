@@ -104,30 +104,38 @@ export function expectedRotations(code=''){
   return Number(m[1])+(m[2]==='A'?0.5:0);
 }
 
-// The Technical Panel judges missing rotation at blade contact, not by torso yaw.
-// MediaPipe gives us torso rotation, which systematically under-counts some pre/post
-// blade rotation. We therefore remove a calibrated proxy bias and widen the exact
-// 1/4 and 1/2 thresholds by the measured rotation reliability instead of treating
-// raw shoulder yaw as a literal blade-angle call.
+// ISU calls q / < / << from the missing blade rotation at landing. MediaPipe torso
+// yaw is only a proxy, so we correct its systematic bias and, when the landing blade
+// is visible, blend in a direct ankle-to-toe vs post-landing travel angle cue.
 export function rotationTechnicalCall(metrics={},code=''){
   const expected=expectedRotations(code);
   const measured=Math.max(0,Number(metrics.rotation)||0);
-  const reliability=clamp(Number(metrics.rotationReliability??metrics.rotationConfidence??55),0,100);
+  let reliability=clamp(Number(metrics.rotationReliability??metrics.rotationConfidence??55),0,100);
   const isAxel=/A(?:q|<|$)/.test(String(code||''));
   const proxyBias=Number.isFinite(Number(metrics.rotationProxyBias))?Number(metrics.rotationProxyBias):(isAxel?.16:.28);
   const rawDeficit=expected-measured;
-  const deficit=Math.max(0,rawDeficit-proxyBias);
-  const tolerance=reliability>=80?.04:reliability>=60?.07:.10;
+  const torsoDeficit=Math.max(0,rawDeficit-proxyBias);
+  const bladeDeficit=Number(metrics.landingBladeDeficit),bladeConfidence=clamp(Number(metrics.landingBladeConfidence)||0,0,100);
+  let deficit=torsoDeficit,bladeWeight=0;
 
-  if(!Number.isFinite(measured)||measured<=0||reliability<35){
-    return {call:'review',label:'Rotation потребує перевірки',expected,measured:round(measured,2),rawDeficit:round(rawDeficit,2),deficit:round(deficit,2),reliability,proxyBias};
+  if(Number.isFinite(bladeDeficit)&&bladeConfidence>=45){
+    bladeWeight=clamp((bladeConfidence-35)/80,.18,.68);
+    deficit=torsoDeficit*(1-bladeWeight)+Math.max(0,bladeDeficit)*bladeWeight;
+    const disagreement=Math.abs(torsoDeficit-bladeDeficit);
+    reliability=clamp(Math.round(reliability*(1-bladeWeight)+bladeConfidence*bladeWeight-disagreement*70),25,97);
   }
+
+  const tolerance=reliability>=80?.04:reliability>=60?.07:.10;
+  if(!Number.isFinite(measured)||measured<=0||reliability<35){
+    return {call:'review',label:'Rotation потребує перевірки',expected,measured:round(measured,2),rawDeficit:round(rawDeficit,2),deficit:round(deficit,2),torsoDeficit:round(torsoDeficit,2),bladeDeficit:Number.isFinite(bladeDeficit)?round(bladeDeficit,2):null,bladeConfidence,reliability,proxyBias,bladeWeight:round(bladeWeight,2)};
+  }
+
   let call='clean';
   if(deficit>=.50+tolerance/2)call='<<';
   else if(deficit>.25+tolerance)call='<';
   else if(deficit>=.25-tolerance)call='q';
   const label=call==='clean'?'Rotation: clean':call==='q'?'Rotation call: q (¼)':call==='<'?'Rotation call: <': 'Rotation call: <<';
-  return {call,label,expected,measured:round(measured,2),rawDeficit:round(rawDeficit,2),deficit:round(deficit,2),reliability,proxyBias};
+  return {call,label,expected,measured:round(measured,2),rawDeficit:round(rawDeficit,2),deficit:round(deficit,2),torsoDeficit:round(torsoDeficit,2),bladeDeficit:Number.isFinite(bladeDeficit)?round(bladeDeficit,2):null,bladeConfidence,reliability,proxyBias,bladeWeight:round(bladeWeight,2)};
 }
 
 export function estimateGOE(metrics={},code='',flags={}){
@@ -156,13 +164,9 @@ export function estimateGOE(metrics={},code='',flags={}){
   else if(rot.call==='<<')reasons.push(['neg','Ймовірний <<: близько ½ або більше']);
   else reasons.push(['neu','Rotation call недостатньо надійний — без автоматичного штрафу']);
 
-  // With only camera metrics we deliberately keep the positive start modest.
-  // Three strong measurable bullets can justify +1; only exceptional execution +2.
   let grade=positive>=3?1:0;
   if(positive>=3&&height>=.36&&stability>=90&&axis<=5)grade=2;
 
-  // ISU-style reductions. q is a -2 reduction. < and << are ranges; choose the
-  // conservative end according to how close the estimated blade deficit is to 1/2.
   if(height<.13)grade-=1;
   if(axis>24)grade-=2;else if(axis>16)grade-=1;
   const hasExplicitLanding=flags.hand||flags.twoFoot||flags.stepOut||flags.fall;
