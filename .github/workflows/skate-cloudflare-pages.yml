@@ -1,0 +1,26 @@
+name: Deploy SKATE to Cloudflare Pages
+
+on:
+  push:
+    branches:
+      - skate-cloudflare
+    paths:
+      - 'skate-family/**'
+      - '.github/workflows/skate-cloudflare-pages.yml'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy skate-family --project-name=skate-family --branch=skate-cloudflare
