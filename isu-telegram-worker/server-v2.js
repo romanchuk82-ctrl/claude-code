@@ -253,6 +253,43 @@ async function detectLowerBodyCrop(videoPath, dir, takeoff, duration, index) {
   return {x:x1,y:y1,w:x2-x1,h:y2-y1};
 }
 
+async function rankJumpTypesFromReplay(frames, index, method) {
+  const content=[{type:'input_text',text:`Compare this chronological take-off replay against all six single-skating jump families. Do NOT assess revolutions or GOE. Score each family 0..100 by mechanics only.
+Templates: A = forward outside edge, no toe-pick; T = backward outside-edge toe-assisted jump; S = backward inside-edge, no toe-pick; Lo = backward outside-edge, no toe-pick; F = backward inside-edge with toe-pick; Lz = backward outside-edge with toe-pick and counter-rotated entry.
+Judge direction from blade travel across frames, never torso facing. A missing/blurred toe contact must be UNCLEAR, not NO.
+Return JSON only: {\"scores\":{\"A\":0,\"T\":0,\"S\":0,\"Lo\":0,\"F\":0,\"Lz\":0},\"best_type\":\"A|T|S|Lo|F|Lz|UNRESOLVED\",\"confidence\":0,\"evidence\":\"short\"}. Method=${method}` }];
+  for (const f of frames) { content.push({type:'input_text',text:`t=${f.time.toFixed(3)}s`}); const b64=(await fs.readFile(f.path)).toString('base64'); content.push({type:'input_image',image_url:`data:image/jpeg;base64,${b64}`,detail:'high'}); }
+  const r=await createJsonResponse([{role:'user',content}],{label:`jump-template-ranker-${index}-${method}`,primaryEffort:'high',primaryTokens:1200});
+  if (!r || !r.scores) return {best_type:'UNRESOLVED',confidence:0,scores:{},evidence:'unresolved'};
+  const entries=Object.entries(r.scores).map(([k,v])=>[k,Number(v)||0]).sort((a,b)=>b[1]-a[1]);
+  const top=entries[0]||['UNRESOLVED',0], second=entries[1]||['',0];
+  const best=(top[1]>=65 && top[1]-second[1]>=10)?top[0]:'UNRESOLVED';
+  return {...r,best_type:best,margin:top[1]-second[1]};
+}
+
+async function detectToePickEvidence(frames, jumpIndex) {
+  const content=[{type:'input_text',text:`ISU take-off micro-review for jump ${jumpIndex}. Determine ONLY whether a free-foot toe-pick assist occurred in the final take-off phase. Frames are chronological and tightly cropped to the lower body.
+A toe assist can be extremely brief (1-3 frames) immediately before both skates leave the ice. Do not confuse body facing with travel direction.
+Return JSON only: {"toe_contact":"yes|no|unclear","toe_pick_foot":"left|right|none|unclear","last_ice_frame":0,"contact_frames":[0],"both_skates_continuously_clear":"yes|no","confidence":0,"evidence":"short"}.
+CRITICAL: return "no" ONLY if both skates are clearly distinguishable throughout the final ~0.25 s before the last ice contact AND the free foot is visibly off the ice in every one of those frames. If feet overlap, motion blur hides the blade, crop misses a skate, or contact cannot be excluded, return "unclear", never "no".`}];
+  for (let idx=0; idx<frames.length; idx++) { const f=frames[idx]; content.push({type:'input_text',text:`frame=${idx+1} t=${f.time.toFixed(3)}s`}); const b64=(await fs.readFile(f.path)).toString('base64'); content.push({type:'input_image',image_url:`data:image/jpeg;base64,${b64}`,detail:'high'}); }
+  return await createJsonResponse([{role:'user',content}],{label:`toe-pick-${jumpIndex}`,primaryEffort:'high',primaryTokens:900}) || {toe_contact:'unclear',toe_pick_foot:'unclear',both_skates_continuously_clear:'no',confidence:0,evidence:'unresolved'};
+}
+
+async function classifyJumpPattern(frames, jumpIndex) {
+  const content=[{type:'input_text',text:`Independent ISU jump-family classifier for jump ${jumpIndex}. Use the WHOLE chronological take-off motion. Compare the mechanics directly; do not infer from landing pose and do not assess rotation count/GOE.
+A = forward outside-edge take-off, no toe assist.
+T = backward outside-edge take-off plus free-foot toe pick; skating/take-off foot corresponds to normal toe-loop mechanics.
+S = backward inside-edge take-off, no toe assist, free-leg swing.
+Lo = backward outside-edge take-off from skating foot, no toe assist, crossed free leg.
+F = backward inside-edge plus toe pick.
+Lz = backward outside-edge plus toe pick, counter-rotated Lutz setup; picking foot is separate from skating-edge foot.
+A brief/blurred toe contact may be inferred as possible from the free-foot trajectory, but if mechanics do not distinguish types, choose UNRESOLVED.
+Return JSON only: {"type":"A|T|S|Lo|F|Lz|UNRESOLVED","confidence":0,"toe_jump_likely":"yes|no|unclear","evidence":"short","alternatives":["..."]}.` }];
+  for (let idx=0; idx<frames.length; idx++) { const f=frames[idx]; content.push({type:'input_text',text:`frame=${idx+1} t=${f.time.toFixed(3)}s`}); const b64=(await fs.readFile(f.path)).toString('base64'); content.push({type:'input_image',image_url:`data:image/jpeg;base64,${b64}`,detail:'high'}); }
+  return await createJsonResponse([{role:'user',content}],{label:`jump-pattern-${jumpIndex}`,primaryEffort:'high',primaryTokens:900}) || {type:'UNRESOLVED',confidence:0,toe_jump_likely:'unclear',evidence:'unresolved',alternatives:[]};
+}
+
 async function identifyJumpTypePanel(videoPath, dir, duration, locator) {
   const results = [];
   const jumps = (locator.jumps || []).filter(j => Number.isFinite(Number(j.takeoff)));
@@ -278,7 +315,13 @@ Use chronological motion. Take-off direction means blade travel immediately befo
     const cropNorm=await detectLowerBodyCrop(videoPath,dir,takeoff,duration,i+1);
     const zoom=cropNorm ? await extractTimedFrames(videoPath,dir,{start:takeStart,length:1.10,fps:30,width:1500,prefix:`identity-zoom-${i+1}`,max:34,cropNorm}) : [];
     const third=zoom.length ? await ask(zoom,'zoomed lower-body replay: prioritize toe-pick contact, take-off edge and skating foot') : null;
-    console.log('jump identity zoom', JSON.stringify({jump:i+1,cropNorm,zoomFrames:zoom.length,third}));
+    const toeEvidence=zoom.length ? await detectToePickEvidence(zoom,i+1) : {toe_contact:'unclear',toe_pick_foot:'unclear',both_skates_continuously_clear:'no',confidence:0};
+    const pattern=zoom.length ? await classifyJumpPattern(zoom,i+1) : {type:'UNRESOLVED',confidence:0,toe_jump_likely:'unclear'};
+    if (third) {
+      if (toeEvidence.toe_contact==='yes') { third.toe_assist='yes'; if (toeEvidence.toe_pick_foot && toeEvidence.toe_pick_foot!=='unclear') third.toe_pick_foot=toeEvidence.toe_pick_foot; }
+      if (third.toe_assist==='no' && !(toeEvidence.toe_contact==='no' && toeEvidence.both_skates_continuously_clear==='yes' && confidencePct(toeEvidence.confidence)>=75)) third.toe_assist='unclear';
+    }
+    console.log('jump identity zoom', JSON.stringify({jump:i+1,cropNorm,zoomFrames:zoom.length,third,toeEvidence,pattern}));
     const type1=inferJumpTypeFromMechanics(first);
     const type2=inferJumpTypeFromMechanics(second);
     const type3=third ? inferJumpTypeFromMechanics(third) : 'UNRESOLVED';
@@ -291,11 +334,18 @@ Use chronological motion. Take-off direction means blade travel immediately befo
     }
     const typeMerged=inferJumpTypeFromMechanics(merged);
     let consensus_type='UNRESOLVED';
-    if (third && confidencePct(third.confidence)>=75 && type3!=='UNRESOLVED' && third.toe_assist==='yes') consensus_type=type3;
-    else if (confidencePct(first.confidence)>=70 && confidencePct(second.confidence)>=70 && type1!=='UNRESOLVED' && type1===type2) consensus_type=type1;
-    else if (typeMerged!=='UNRESOLVED' && [type1,type2,type3].filter(x=>x===typeMerged).length>=2) consensus_type=typeMerged;
-    const candidates=[...new Set([type1,type2,type3,typeMerged].filter(x=>x && x!=='UNRESOLVED'))];
-    results.push({jump:i+1,consensus_type,mechanics_full:first,mechanics_takeoff:second,mechanics_zoom:third,cropNorm,merged_mechanics:merged,candidates});
+    const patternType=pattern?.type || 'UNRESOLVED';
+    const patternStrong=confidencePct(pattern?.confidence)>=80;
+    const toePositive=toeEvidence.toe_contact==='yes' && confidencePct(toeEvidence.confidence)>=65;
+    const toeNegativeReliable=toeEvidence.toe_contact==='no' && toeEvidence.both_skates_continuously_clear==='yes' && confidencePct(toeEvidence.confidence)>=75;
+    if (patternStrong && ['Lz','F','T'].includes(patternType) && pattern.toe_jump_likely==='yes' && toeEvidence.toe_contact!=='no') consensus_type=patternType;
+    else if (toePositive && patternStrong && ['Lz','F','T'].includes(patternType)) consensus_type=patternType;
+    else if (third && confidencePct(third.confidence)>=75 && type3!=='UNRESOLVED' && third.toe_assist==='yes') consensus_type=type3;
+    else if (toeNegativeReliable && patternStrong && ['A','S','Lo'].includes(patternType)) consensus_type=patternType;
+    else if (toeNegativeReliable && confidencePct(first.confidence)>=70 && confidencePct(second.confidence)>=70 && type1!=='UNRESOLVED' && type1===type2 && type1!=='A') consensus_type=type1;
+    else if (toeNegativeReliable && typeMerged!=='UNRESOLVED' && [type1,type2,type3].filter(x=>x===typeMerged).length>=2) consensus_type=typeMerged;
+    const candidates=[...new Set([patternType,type1,type2,type3,typeMerged,...(pattern?.alternatives||[])].filter(x=>x && x!=='UNRESOLVED'))];
+    results.push({jump:i+1,consensus_type,toe_evidence:toeEvidence,pattern_classifier:pattern,mechanics_full:first,mechanics_takeoff:second,mechanics_zoom:third,cropNorm,merged_mechanics:merged,candidates});
   }
   return results;
 }
