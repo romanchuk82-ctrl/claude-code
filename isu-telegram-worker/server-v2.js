@@ -92,6 +92,26 @@ function textFromResponse(response) {
   return parts.join('\n\n').trim();
 }
 
+async function createTextResponse(input, { primaryEffort='high', primaryTokens=4200, label='analysis' } = {}) {
+  const attempts = [
+    { effort: primaryEffort, tokens: primaryTokens },
+    { effort: 'medium', tokens: Math.max(primaryTokens, 6000) },
+    { effort: 'low', tokens: Math.max(primaryTokens, 7000) }
+  ];
+  let last = null;
+  for (let i = 0; i < attempts.length; i++) {
+    const a = attempts[i];
+    const response = await openai.responses.create({
+      model: MODEL, reasoning: { effort: a.effort }, max_output_tokens: a.tokens, input
+    });
+    const text = textFromResponse(response);
+    console.log('OpenAI text attempt', { label, attempt: i + 1, status: response.status, effort: a.effort, max_output_tokens: a.tokens, chars: text.length, incomplete: response.incomplete_details || null });
+    if (text) return text;
+    last = response;
+  }
+  throw new Error('OpenAI returned no textual answer after 3 attempts' + (last?.status ? ' (' + last.status + ')' : ''));
+}
+
 function parseJsonLoose(text) {
   if (!text) throw new Error('empty locator response');
   const cleaned = text.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim();
@@ -193,14 +213,7 @@ Use emoji section headings such as 🔎 TECHNICAL CALL, 📊 GOE, 🔁 ALTERNATI
     content.push({ type: 'input_image', image_url: `data:image/jpeg;base64,${b64}`, detail: 'high' });
   }
 
-  const response = await openai.responses.create({
-    model: MODEL,
-    reasoning: { effort: 'high' },
-    max_output_tokens: 3600,
-    input: [{ role: 'user', content }]
-  });
-  const text = textFromResponse(response);
-  if (!text) throw new Error('OpenAI returned no textual jump answer');
+  const text = await createTextResponse([{ role: 'user', content }], { primaryEffort: 'high', primaryTokens: 5200, label: 'jump-final' });
   return { text, locator };
 }
 
@@ -221,11 +234,7 @@ Frames are chronological samples with timestamps. For a full program: inventory 
     const b64 = (await fs.readFile(f.path)).toString('base64');
     content.push({ type: 'input_image', image_url: `data:image/jpeg;base64,${b64}`, detail: fullMode ? 'low' : 'high' });
   }
-  const response = await openai.responses.create({
-    model: MODEL, reasoning: { effort: 'high' }, max_output_tokens: fullMode ? 6000 : 3600,
-    input: [{ role: 'user', content }]
-  });  const text = textFromResponse(response);
-  if (!text) throw new Error('OpenAI returned no textual generic answer');
+  const text = await createTextResponse([{ role: 'user', content }], { primaryEffort: 'high', primaryTokens: fullMode ? 7000 : 5000, label: fullMode ? 'full-generic' : 'fragment-final' });
   return { text, locator: null };
 }
 
