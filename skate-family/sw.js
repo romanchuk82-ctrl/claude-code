@@ -1,4 +1,4 @@
-const CACHE='skate-v34';
+const CACHE='skate-v35';
 const ASSETS=[
   '/',
   '/manifest.webmanifest?v=6',
@@ -30,10 +30,13 @@ self.addEventListener('install',e=>{
   e.waitUntil(caches.open(CACHE).then(c=>c.addAll(ASSETS)));
 });
 
-self.addEventListener('activate',e=>e.waitUntil(Promise.all([
-  self.clients.claim(),
-  caches.keys().then(keys=>Promise.all(keys.filter(k=>k!==CACHE).map(k=>caches.delete(k))))
-])));
+self.addEventListener('activate',e=>e.waitUntil((async()=>{
+  await self.clients.claim();
+  const keys=await caches.keys();
+  await Promise.all(keys.filter(k=>k!==CACHE).map(k=>caches.delete(k)));
+  const clients=await self.clients.matchAll({type:'window',includeUncontrolled:true});
+  await Promise.all(clients.map(c=>c.navigate(c.url).catch(()=>null)));
+})()));
 
 async function navigationResponse(request){
   try{
