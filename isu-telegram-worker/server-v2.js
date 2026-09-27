@@ -5,6 +5,7 @@ import os from 'os';
 import { spawn } from 'child_process';
 import ffmpegPath from 'ffmpeg-static';
 import OpenAI from 'openai';
+import { analyzeFullProgram } from './full-program.js';
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));
@@ -157,9 +158,9 @@ async function buildNormalContext(videoPath, dir, duration, locator) {
 
 async function analyzeJumpClip(videoPath, dir, duration, caption, onProgress) {
   await onProgress('⏳ Аналізую відео… Крок 1/3: знаходжу всі стрибки та їх зв’язок.');
-  const sparseFps = duration <= 6 ? 6 : 4;
+  const sparseFps = duration <= 6 ? 6 : duration <= 15 ? 4 : 3;
   const sparse = await extractTimedFrames(videoPath, dir, {
-    start: 0, length: duration, fps: sparseFps, width: 768, prefix: 'locator', max: 60
+    start: 0, length: duration, fps: sparseFps, width: 768, prefix: 'locator', max: 120
   });
   const locator = await locateJumpStructure(sparse, duration, caption);
 
@@ -269,25 +270,28 @@ async function processVideoMessage(msg, video) {
     if (!duration || duration <= 0) throw new Error('Could not determine video duration');
     const caption = msg.caption || '';
     const fullMode = duration > 60 || /\bfull\b|повн/i.test(caption);
-    const shortJumpMode = !fullMode && duration <= 15;
+    const shortJumpMode = !fullMode && duration <= 30;
 
-    const eta = shortJumpMode ? '≈ 45–90 с' : fullMode ? '≈ 3–6 хв' : '≈ 1–3 хв';
+    const eta = shortJumpMode ? (duration <= 12 ? '≈ 45–90 с' : '≈ 1–2 хв') : fullMode ? '≈ 3–6 хв' : '≈ 1–3 хв';
     await tg('editMessageText', {
       chat_id: msg.chat.id, message_id: progress.message_id,
       text: `⏳ Відео ${duration.toFixed(1)} с. Режим: ${fullMode ? 'FULL PROGRAM' : shortJumpMode ? 'JUMP / COMBO' : 'FRAGMENT'}. Орієнтовно ${eta}.`
     });
 
     let result;
-    if (shortJumpMode) {
+    if (fullMode) {
+      result = await analyzeFullProgram({
+        openai, model: MODEL, rules: RULES, videoPath, dir, duration, caption,
+        extractTimedFrames, textFromResponse,
+        onProgress: async text => tg('editMessageText', { chat_id: msg.chat.id, message_id: progress.message_id, text })
+      });
+    } else if (shortJumpMode) {
       result = await analyzeJumpClip(videoPath, dir, duration, caption, async text => {
         await tg('editMessageText', { chat_id: msg.chat.id, message_id: progress.message_id, text });
       });
     } else {
-      await tg('editMessageText', {
-        chat_id: msg.chat.id, message_id: progress.message_id,
-        text: fullMode ? '⏳ Аналізую повну програму: inventory → Technical Calls → GOE → scoring.' : '⏳ Аналізую фрагмент за ISU 2026/27.'
-      });
-      result = await analyzeGeneric(videoPath, dir, duration, caption, fullMode);
+      await tg('editMessageText', { chat_id: msg.chat.id, message_id: progress.message_id, text: '⏳ Аналізую фрагмент за ISU 2026/27.' });
+      result = await analyzeGeneric(videoPath, dir, duration, caption, false);
     }
 
     console.log('analysis complete', {
