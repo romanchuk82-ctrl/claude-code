@@ -18,6 +18,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Emergency MediaPipe iPhone hotfix
+        shell: bash
+        run: |
+          set -euo pipefail
+          sed -i "s/const MP_VERSION='0.10.22';/const MP_VERSION='0.10.21';/" skate-family/src/analyzer.js
+          grep -q "MP_VERSION='0.10.21'" skate-family/src/analyzer.js
+
       - name: Validate Sofia May 2026 benchmark
         run: |
           node --experimental-default-type=module -e "import('./skate-family/src/scoringEngine.js').then(m=>{const r=m.runScoringBenchmark(); console.log(JSON.stringify({ok:r.ok,base:r.base,tes:r.tes,pcs:r.pcs,total:r.total,expected:r.expected},null,2)); if(!r.ok) process.exit(1)})"
@@ -62,7 +69,8 @@ jobs:
             return 1
           }
 
-          wait_contains https://skate-family.pages.dev/ 'main.js?v=8' /tmp/skate-index
+          wait_contains https://skate-family.pages.dev/ 'main.js?v=9' /tmp/skate-index
+          wait_contains https://skate-family.pages.dev/src/analyzer.js "MP_VERSION='0.10.21'" /tmp/skate-analyzer
           wait_contains https://skate-family.pages.dev/src/scoringEngine.js 'SONYA_MAY_2026_BENCHMARK' /tmp/skate-engine
           wait_contains https://skate-family.pages.dev/src/programJudgeUnified.js 'shared-ijs-v3-unified' /tmp/skate-unified
           echo 'SKATE Cloudflare Pages production verification passed.'
