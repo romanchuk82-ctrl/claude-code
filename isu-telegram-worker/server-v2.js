@@ -557,15 +557,22 @@ async function deliverResult(chatId, originalMessageId, progressId, resultText) 
   } catch (e) { console.error('parent summary error', e); }
 }
 
-async function processVideoMessage(msg, video) {
+async function processVideoMessage(msg, video, existingProgress = null) {
   let dir;
-  let progress;
+  let progress = existingProgress;
   try {
-    progress = await tg('sendMessage', {
+    if (!progress) {
+      progress = await tg('sendMessage', {
+        chat_id: msg.chat.id,
+        text: '⏳ Прийнято. Починаю аналіз відео…',
+        reply_to_message_id: msg.message_id,
+        allow_sending_without_reply: true
+      });
+    }
+    await tg('editMessageText', {
       chat_id: msg.chat.id,
-      text: '⏳ Аналізую відео… Завантажую файл і визначаю тривалість.',
-      reply_to_message_id: msg.message_id,
-      allow_sending_without_reply: true
+      message_id: progress.message_id,
+      text: '⏳ Аналізую відео… Завантажую файл і визначаю тривалість.'
     });
     dir = await fs.mkdtemp(path.join(os.tmpdir(), 'isu-'));
     const videoPath = path.join(dir, 'input.mp4');
@@ -653,7 +660,13 @@ app.post('/telegram', async (req, res) => {
   if (processed.has(key)) return;
   processed.add(key);
   pendingVideoByChat.delete(Number(msg.chat.id));
-  processVideoMessage(pending.msg, pending.video).catch(err => console.error('unhandled processVideoMessage', err));
+  const progress = await tg('sendMessage', {
+    chat_id: msg.chat.id,
+    text: '⏳ Прийнято. Починаю аналіз останнього відео…',
+    reply_to_message_id: msg.message_id,
+    allow_sending_without_reply: true
+  }).catch(() => null);
+  processVideoMessage(pending.msg, pending.video, progress).catch(err => console.error('unhandled processVideoMessage', err));
 });
 
 app.listen(PORT, async () => {
