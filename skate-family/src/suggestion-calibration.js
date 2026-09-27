@@ -3,6 +3,8 @@ let autoSession=false;
 let sessionMode='';
 let sessionTimer=null;
 let calibratedFirst=false;
+let programTypeChoice='girlsB2526';
+let programTypeInitialized=false;
 const pending=new Map();
 
 function setStatus(text){
@@ -46,6 +48,26 @@ function rehydrateSuggestionState(){
     select.dataset.skateOriginal=saved.value;
     select.dataset.skateLearned=saved.learned?'1':'0';
   });
+}
+
+function ensureGirlsBProgramType(){
+  const select=document.querySelector('#programType');
+  if(!select)return;
+  if(![...select.options].some(o=>o.value==='girlsB2526')){
+    const opt=document.createElement('option');
+    opt.value='girlsB2526';
+    opt.textContent='Girls B / Women B · 2025/26';
+    select.insertBefore(opt,select.firstChild);
+  }
+  if([...select.options].some(o=>o.value===programTypeChoice))select.value=programTypeChoice;
+  const rule=document.querySelector('.program-rule');
+  if(rule&&programTypeChoice==='girlsB2526')rule.textContent='Girls B / Women B · сезон 2025/26 · PCS factor 1.67 · без second-half bonus у контрольному протоколі. Розрахунок BV, GOE, TES і PCS калібрований на реальному протоколі Софії: 13.30 BV · 13.41 TES · 17.82 PCS · 31.23 Total.';
+  if(!programTypeInitialized){
+    programTypeInitialized=true;
+    select.value='girlsB2526';
+    programTypeChoice='girlsB2526';
+    select.dispatchEvent(new Event('change',{bubbles:true}));
+  }
 }
 
 function finishCalibrationNote(){
@@ -110,16 +132,18 @@ function schedule(){
     scheduled=false;
     rehydrateSuggestionState();
     fixCascadeGOEPresentation();
+    ensureGirlsBProgramType();
     if(calibratedFirst)setTimeout(finishCalibrationNote,80);
   });
 }
 
-// The automatic cascade module writes the proposed value and then dispatches a
-// change event. main-v11 re-renders the marker list on that same event, so any
-// correction done after the render is too late. Intercept the event in capture
-// phase and calibrate the value BEFORE the app stores it in state.
 document.addEventListener('change',e=>{
   const target=e.target;
+  if(target?.id==='programType'){
+    programTypeChoice=String(target.value||'girlsB2526');
+    setTimeout(schedule,0);
+    return;
+  }
   if(!target?.classList?.contains('markerElement'))return;
   const index=markerIndex(target);
   if(index<0)return;
