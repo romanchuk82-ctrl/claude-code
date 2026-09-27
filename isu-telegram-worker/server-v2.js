@@ -210,6 +210,12 @@ async function buildNormalContext(videoPath, dir, duration, locator) {
   });
 }
 
+function confidencePct(v) {
+  const n=Number(v);
+  if (!Number.isFinite(n)) return 0;
+  return n >= 0 && n <= 1 ? n * 100 : n;
+}
+
 function inferJumpTypeFromMechanics(o) {
   const dir = o?.takeoff_direction;
   const toe = o?.toe_assist;
@@ -239,8 +245,9 @@ async function detectLowerBodyCrop(videoPath, dir, takeoff, duration, index) {
   for (const f of frames) { const b64=(await fs.readFile(f.path)).toString('base64'); content.push({type:'input_image',image_url:`data:image/jpeg;base64,${b64}`,detail:'high'}); }
   const r=await createJsonResponse([{role:'user',content}],{label:`lower-body-bbox-${index}`,primaryEffort:'medium',primaryTokens:500});
   const b=Array.isArray(r?.bbox)?r.bbox.map(Number):null;
-  if (!b || b.length!==4 || b.some(x=>!Number.isFinite(x)) || Number(r?.confidence||0)<55) return {x:0.18,y:0.12,w:0.64,h:0.84,fallback:true};
-  let [x1,y1,x2,y2]=b.map(x=>Math.max(0,Math.min(1000,x))/1000);
+  if (!b || b.length!==4 || b.some(x=>!Number.isFinite(x)) || confidencePct(r?.confidence)<55) return {x:0.18,y:0.12,w:0.64,h:0.84,fallback:true};
+  const unitScale=Math.max(...b.map(x=>Math.abs(x)))<=1.5 ? 1 : 1000;
+  let [x1,y1,x2,y2]=b.map(x=>Math.max(0,Math.min(unitScale,x))/unitScale);
   if (x2<=x1 || y2<=y1) return {x:0.18,y:0.12,w:0.64,h:0.84,fallback:true};
   const w=x2-x1,h=y2-y1; x1=Math.max(0,x1-w*0.18); x2=Math.min(1,x2+w*0.18); y1=Math.max(0,y1-h*0.18); y2=Math.min(1,y2+h*0.20);
   return {x:x1,y:y1,w:x2-x1,h:y2-y1};
@@ -279,13 +286,13 @@ Use chronological motion. Take-off direction means blade travel immediately befo
     for (const k of ['takeoff_direction','toe_assist','takeoff_edge','skating_foot','toe_pick_foot','free_leg_action']) {
       if (first[k] !== second[k] && second[k] !== 'unclear') merged[k]='unclear';
     }
-    if (third && Number(third.confidence)>=65) {
+    if (third && confidencePct(third.confidence)>=65) {
       for (const k of ['toe_assist','takeoff_edge','skating_foot','toe_pick_foot']) if (third[k] && third[k] !== 'unclear') merged[k]=third[k];
     }
     const typeMerged=inferJumpTypeFromMechanics(merged);
     let consensus_type='UNRESOLVED';
-    if (third && Number(third.confidence)>=75 && type3!=='UNRESOLVED' && third.toe_assist==='yes') consensus_type=type3;
-    else if (Number(first.confidence)>=70 && Number(second.confidence)>=70 && type1!=='UNRESOLVED' && type1===type2) consensus_type=type1;
+    if (third && confidencePct(third.confidence)>=75 && type3!=='UNRESOLVED' && third.toe_assist==='yes') consensus_type=type3;
+    else if (confidencePct(first.confidence)>=70 && confidencePct(second.confidence)>=70 && type1!=='UNRESOLVED' && type1===type2) consensus_type=type1;
     else if (typeMerged!=='UNRESOLVED' && [type1,type2,type3].filter(x=>x===typeMerged).length>=2) consensus_type=typeMerged;
     const candidates=[...new Set([type1,type2,type3,typeMerged].filter(x=>x && x!=='UNRESOLVED'))];
     results.push({jump:i+1,consensus_type,mechanics_full:first,mechanics_takeoff:second,mechanics_zoom:third,cropNorm,merged_mechanics:merged,candidates});
