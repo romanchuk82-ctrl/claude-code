@@ -21,7 +21,7 @@ if (!BOT_TOKEN || !OPENAI_API_KEY) throw new Error('Missing required secrets');
 const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 const processed = new Set();
 
-const RULES = `ISU Single Skating 2026/27. First complete Technical Call, only then GOE. Jump order: type A/T/S/Lo/F/Lz; rotations; solo/combo/SEQ; landing rotation clean/q/</<<; F/Lz edge clean/!/e only if visible; other errors; GOE. q=exactly 1/4 short, <=more than 1/4 but less than 1/2, <<=1/2 or more. Judge rotation by blade, not shoulders/hips. If F/Lz edge is not reliable say EDGE: NOT RELIABLY VISIBLE. Do not split combinations; one GOE for whole jump element. Prefer UNCERTAIN when evidence is insufficient. Never use 100% confidence from one unofficial angle. Explain in Ukrainian, keep ISU codes in English.`;
+const RULES = await fs.readFile(new URL('./project-rules.md', import.meta.url), 'utf8');
 async function tg(method, body) {
   const r = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/${method}`, {
     method: 'POST',
