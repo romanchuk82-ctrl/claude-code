@@ -91,11 +91,22 @@ async function analyze(framePaths, duration, caption) {
   }
   const response = await openai.responses.create({
     model: MODEL,
-    reasoning: { effort: 'high' },
-    max_output_tokens: 1800,
+    reasoning: { effort: 'medium' },
+    max_output_tokens: 3500,
     input: [{ role: 'user', content }]
   });
-  return response.output_text?.trim() || 'Не вдалося сформувати оцінку.';
+  const direct = response.output_text?.trim();
+  if (direct) return direct;
+  const parts = [];
+  for (const item of response.output || []) {
+    for (const c of item.content || []) {
+      if (typeof c.text === 'string' && c.text.trim()) parts.push(c.text.trim());
+    }
+  }
+  const fallback = parts.join('\n\n').trim();
+  console.log('OpenAI response status', response.status, 'output_items', response.output?.length || 0, 'text_chars', fallback.length);
+  if (fallback) return fallback;
+  throw new Error('OpenAI returned no textual answer');
 }
 
 function pickVideo(msg) {
