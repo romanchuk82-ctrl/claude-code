@@ -51,5 +51,6 @@ jobs:
             test -s /tmp/skate-check
           done
           curl --fail --silent --show-error --location --retry 6 --retry-delay 2 --retry-all-errors \
-            https://skate-family.pages.dev/ | grep -q 'SKATE'
+            --output /tmp/skate-index https://skate-family.pages.dev/
+          grep -q 'SKATE' /tmp/skate-index
           echo 'SKATE Cloudflare Pages verification passed.'
