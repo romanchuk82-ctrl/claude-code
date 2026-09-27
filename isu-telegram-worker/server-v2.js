@@ -16,8 +16,9 @@ const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const TARGET_CHAT_ID = Number(process.env.TARGET_CHAT_ID || '-5368053565');
 const MODEL = process.env.OPENAI_MODEL || 'gpt-5.6-sol';
 const WEBHOOK_SECRET = process.env.TELEGRAM_WEBHOOK_SECRET || '';
-const PUBLIC_URL = process.env.PUBLIC_URL || '';
+const UPLOAD_SECRET = process.env.ISU_UPLOAD_SECRET || '';
 if (!BOT_TOKEN || !OPENAI_API_KEY) throw new Error('Missing required secrets');
+if (!UPLOAD_SECRET) throw new Error('Missing ISU_UPLOAD_SECRET');
 
 const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 const RULES = await fs.readFile(new URL('./project-rules.md', import.meta.url), 'utf8');
@@ -630,6 +631,61 @@ async function processVideoMessage(msg, video, existingProgress = null) {
     if (dir) await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
   }
 }
+
+async function analyzeUploadedVideo(videoBuffer, caption = '') {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'isu-upload-'));
+  try {
+    const videoPath = path.join(dir, 'input-video');
+    await fs.writeFile(videoPath, videoBuffer);
+    const duration = await probeDuration(videoPath);
+    if (!duration || duration <= 0) throw new Error('Could not determine video duration');
+    const fullMode = duration > 60 || /\bfull\b|повн/i.test(caption);
+    const shortElementMode = !fullMode && duration <= 30;
+    let classification = null;
+    let result;
+
+    if (fullMode) {
+      result = await analyzeFullProgram({
+        openai, model: MODEL, rules: RULES, videoPath, dir, duration, caption,
+        extractTimedFrames, textFromResponse, onProgress: async () => {}
+      });
+    } else if (shortElementMode) {
+      classification = await classifyShortElement(videoPath, dir, duration, caption);
+      result = classification.category === 'jump'
+        ? await analyzeJumpClip(videoPath, dir, duration, caption, async () => {})
+        : await analyzeGeneric(videoPath, dir, duration, caption, false, classification);
+    } else {
+      result = await analyzeGeneric(videoPath, dir, duration, caption, false, null);
+    }
+
+    const analysis = sanitizeTelegramText(result.text);
+    let parentSummary = '';
+    try { parentSummary = await buildParentSummary(analysis); } catch (e) {
+      console.error('upload parent summary error', String(e?.message || e));
+    }
+    return {
+      analysis, parentSummary, duration,
+      mode: fullMode ? 'full' : classification?.category || (shortElementMode ? 'element' : 'fragment')
+    };
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+app.post('/analyze-upload', express.raw({ type: 'application/octet-stream', limit: '250mb' }), async (req, res) => {
+  if (req.get('x-isu-upload-secret') !== UPLOAD_SECRET) return res.sendStatus(403);
+  if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ ok: false, error: 'Empty video body' });
+  let caption = '';
+  try { caption = Buffer.from(req.get('x-isu-caption-b64') || '', 'base64').toString('utf8'); } catch {}
+  try {
+    const result = await analyzeUploadedVideo(req.body, caption);
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    console.error('upload analysis error', String(err?.message || err));
+    res.status(500).json({ ok: false, error: String(err?.message || err).slice(0, 500) });
+  }
+});
+
 app.get('/', (_req, res) => res.json({ ok: true, service: 'isu-telegram-worker-v2' }));
 app.get('/health', (_req, res) => res.json({ ok: true, version: 2 }));
 
@@ -669,19 +725,6 @@ app.post('/telegram', async (req, res) => {
   processVideoMessage(pending.msg, pending.video, progress).catch(err => console.error('unhandled processVideoMessage', err));
 });
 
-app.listen(PORT, async () => {
-  console.log(`ISU worker v2 listening on ${PORT}`);
-  if (PUBLIC_URL) {
-    try {
-      await tg('setWebhook', {
-        url: `${PUBLIC_URL}/telegram`,
-        secret_token: WEBHOOK_SECRET,
-        allowed_updates: ['message'],
-        drop_pending_updates: true
-      });
-      console.log('Telegram webhook configured');
-    } catch (e) {
-      console.error('Webhook setup failed', e);
-    }
-  }
+app.listen(PORT, () => {
+  console.log(`ISU worker v2 listening on ${PORT}; Telegram intake=MTProto upload`);
 });
