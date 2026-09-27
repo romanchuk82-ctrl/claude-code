@@ -3,9 +3,24 @@ import { estimateGOE as sharedEstimateGOE } from './scoringEngine.js?v=13';
 
 let FilesetResolver, PoseLandmarker;
 let landmarker;
+let poseTimestampOffset=0,poseLastTimestamp=-1;
 const G=9.80665;
-const MP_VERSION='0.10.22';
+const MP_VERSION='0.10.21';
 const MP_CDN=`https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VERSION}`;
+
+function monotonicPoseTimestamp(requested){
+  const raw=Math.max(0,Math.round(Number(requested)||0));
+  let next=raw+poseTimestampOffset;
+  if(next<=poseLastTimestamp){poseTimestampOffset+=poseLastTimestamp-next+1;next=raw+poseTimestampOffset}
+  poseLastTimestamp=next;
+  return next;
+}
+function wrapLandmarker(instance){
+  return new Proxy(instance,{get(target,prop){
+    if(prop==='detectForVideo')return (source,timestamp)=>target.detectForVideo(source,monotonicPoseTimestamp(timestamp));
+    const value=target[prop];return typeof value==='function'?value.bind(target):value;
+  }});
+}
 
 async function loadVisionModule(){
   const sources=[`${MP_CDN}/vision_bundle.mjs?skate=12`,`https://unpkg.com/@mediapipe/tasks-vision@${MP_VERSION}/vision_bundle.mjs?skate=12`];
@@ -18,7 +33,9 @@ export async function initPose(){
   if(!FilesetResolver){const mod=await loadVisionModule();FilesetResolver=mod.FilesetResolver;PoseLandmarker=mod.PoseLandmarker}
   const vision=await FilesetResolver.forVisionTasks(`${MP_CDN}/wasm`);
   const options={baseOptions:{modelAssetPath:'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task',delegate:'GPU'},runningMode:'VIDEO',numPoses:1,minPoseDetectionConfidence:.45,minPosePresenceConfidence:.45,minTrackingConfidence:.45};
-  try{landmarker=await PoseLandmarker.createFromOptions(vision,options)}catch(err){console.warn('GPU PoseLandmarker unavailable, falling back to CPU',err);landmarker=await PoseLandmarker.createFromOptions(vision,{...options,baseOptions:{modelAssetPath:options.baseOptions.modelAssetPath}})}
+  let rawLandmarker;
+  try{rawLandmarker=await PoseLandmarker.createFromOptions(vision,options)}catch(err){console.warn('GPU PoseLandmarker unavailable, falling back to CPU',err);rawLandmarker=await PoseLandmarker.createFromOptions(vision,{...options,baseOptions:{modelAssetPath:options.baseOptions.modelAssetPath}})}
+  landmarker=wrapLandmarker(rawLandmarker);
   return landmarker;
 }
 const avg=a=>a.reduce((s,v)=>s+v,0)/(a.length||1);
