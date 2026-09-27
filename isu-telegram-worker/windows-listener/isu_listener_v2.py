@@ -15,6 +15,8 @@ STATE_FILE = QUEUE_ROOT.parent / "last_seen.txt"
 LOG_FILE = QUEUE_ROOT.parent / "isu-listener.log"
 TARGET_CHAT_ID = -5368053565
 ACTIVE = set()
+LAST_SEEN = 0
+MESSAGE_LOCK = asyncio.Lock()
 
 logger = logging.getLogger("isu-listener")
 logger.setLevel(logging.INFO)
@@ -281,45 +283,56 @@ async def _resume_interrupted(client):
             asyncio.create_task(_process_job(client, job_dir, int(progress_id)))
 
 
-async def _poll_loop(client):
-    QUEUE_ROOT.mkdir(parents=True, exist_ok=True)
-    try:
-        last_seen = int(STATE_FILE.read_text(encoding="utf-8").strip() or "0")
-    except Exception:
-        latest = await client.get_messages(TARGET_CHAT_ID, limit=1)
-        last_seen = latest[0].id if latest else 0
-        STATE_FILE.write_text(str(last_seen), encoding="utf-8")
+async def _dispatch_message(client, message):
+    global LAST_SEEN
+    async with MESSAGE_LOCK:
+        if message.id <= LAST_SEEN:
+            return
+        if _is_video(message):
+            await _queue_video(message)
+        elif _is_run_command(message):
+            await _handle_command(client, message)
+        LAST_SEEN = max(LAST_SEEN, message.id)
+        STATE_FILE.write_text(str(LAST_SEEN), encoding="utf-8")
 
+
+async def _event_runtime(client):
     chat = await client.get_entity(TARGET_CHAT_ID)
-    logger.info("LISTENER_ONLINE chat_id=%s title=%s after=%s", TARGET_CHAT_ID, getattr(chat, "title", ""), last_seen)
+    logger.info(
+        "LISTENER_ONLINE chat_id=%s title=%s after=%s mode=events",
+        TARGET_CHAT_ID, getattr(chat, "title", ""), LAST_SEEN,
+    )
     await _resume_interrupted(client)
-
-    while True:
-        try:
-            if not client.is_connected():
-                await client.connect()
-            messages = await client.get_messages(TARGET_CHAT_ID, limit=50, min_id=last_seen)
-            for message in sorted(messages, key=lambda item: item.id):
-                if message.id <= last_seen:
-                    continue
-                if _is_video(message):
-                    await _queue_video(message)
-                elif _is_run_command(message):
-                    await _handle_command(client, message)
-                last_seen = max(last_seen, message.id)
-                STATE_FILE.write_text(str(last_seen), encoding="utf-8")
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.exception("POLL_ERROR")
-            await asyncio.sleep(3)
-        await asyncio.sleep(1)
+    try:
+        messages = await client.get_messages(TARGET_CHAT_ID, limit=50, min_id=LAST_SEEN)
+        for message in sorted(messages, key=lambda item: item.id):
+            await _dispatch_message(client, message)
+    except Exception as exc:
+        logger.warning("STARTUP_CATCHUP_SKIPPED error=%s", type(exc).__name__)
+    await asyncio.Event().wait()
 
 
 def start_isu_inbox(client):
+    global LAST_SEEN
     task = getattr(client, "_isu_inbox_task", None)
     if task and not task.done():
         return task
-    task = asyncio.create_task(_poll_loop(client))
+    QUEUE_ROOT.mkdir(parents=True, exist_ok=True)
+    try:
+        LAST_SEEN = int(STATE_FILE.read_text(encoding="utf-8").strip() or "0")
+    except Exception:
+        LAST_SEEN = 0
+
+    from telethon import events
+
+    async def on_new_message(event):
+        try:
+            await _dispatch_message(client, event.message)
+        except Exception:
+            logger.exception("EVENT_ERROR message_id=%s", getattr(event.message, "id", None))
+
+    client.add_event_handler(on_new_message, events.NewMessage(chats=TARGET_CHAT_ID))
+    client._isu_event_handler = on_new_message
+    task = asyncio.create_task(_event_runtime(client))
     client._isu_inbox_task = task
     return task
