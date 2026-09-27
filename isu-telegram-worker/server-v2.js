@@ -290,6 +290,27 @@ Return JSON only: {"type":"A|T|S|Lo|F|Lz|UNRESOLVED","confidence":0,"toe_jump_li
   return await createJsonResponse([{role:'user',content}],{label:`jump-pattern-${jumpIndex}`,primaryEffort:'high',primaryTokens:900}) || {type:'UNRESOLVED',confidence:0,toe_jump_likely:'unclear',evidence:'unresolved',alternatives:[]};
 }
 
+async function analyzeKinematicSignature(frames, index) {
+  const content=[{type:'input_text',text:`ISU take-off kinematics review for jump ${index}. Do NOT name the jump. Use chronological motion only.
+Determine skating direction from blade geometry: identify toe-pick end vs heel end of the skating blade, then compare the skate displacement across frames. Do not use torso/chest facing.
+Also assess whether the free foot shows a pick setup: extended/separate free leg whose toe end moves toward the ice immediately before take-off, even if exact contact is blurred.
+Return JSON only: {\"blade_travel\":\"forward|backward|unclear\",\"pick_setup\":\"yes|no|unclear\",\"counter_rotation_setup\":\"yes|no|unclear\",\"edge\":\"inside|outside|unclear\",\"confidence\":0,\"evidence\":\"short\"}. If blade toe/heel cannot be separated reliably, use unclear.` }];
+  for (let idx=0; idx<frames.length; idx++) { const f=frames[idx]; content.push({type:'input_text',text:`frame=${idx+1} t=${f.time.toFixed(3)}s`}); const b64=(await fs.readFile(f.path)).toString('base64'); content.push({type:'input_image',image_url:`data:image/jpeg;base64,${b64}`,detail:'high'}); }
+  return await createJsonResponse([{role:'user',content}],{label:`jump-kinematics-${index}`,primaryEffort:'high',primaryTokens:1000}) || {blade_travel:'unclear',pick_setup:'unclear',counter_rotation_setup:'unclear',edge:'unclear',confidence:0,evidence:'unresolved'};
+}
+
+function inferFromKinematics(k) {
+  if (!k || confidencePct(k.confidence)<65) return 'UNRESOLVED';
+  if (k.blade_travel==='forward' && k.pick_setup==='no' && (k.edge==='outside'||k.edge==='unclear')) return 'A';
+  if (k.blade_travel!=='backward') return 'UNRESOLVED';
+  if (k.pick_setup==='yes' && k.edge==='outside' && k.counter_rotation_setup==='yes') return 'Lz';
+  if (k.pick_setup==='yes' && k.edge==='inside') return 'F';
+  if (k.pick_setup==='yes' && k.edge==='outside') return 'T';
+  if (k.pick_setup==='no' && k.edge==='inside') return 'S';
+  if (k.pick_setup==='no' && k.edge==='outside') return 'Lo';
+  return 'UNRESOLVED';
+}
+
 async function identifyJumpTypePanel(videoPath, dir, duration, locator) {
   const results = [];
   const jumps = (locator.jumps || []).filter(j => Number.isFinite(Number(j.takeoff)));
