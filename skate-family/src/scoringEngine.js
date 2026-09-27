@@ -104,43 +104,46 @@ export function expectedRotations(code=''){
   return Number(m[1])+(m[2]==='A'?0.5:0);
 }
 
-// ISU calls q / < / << from the missing blade rotation at landing. MediaPipe torso
-// yaw is only a proxy, so we correct its systematic bias and, when the landing blade
-// is visible, blend in a direct ankle-to-toe vs post-landing travel angle cue.
-export function rotationTechnicalCall(metrics={},code=''){
+// IMPORTANT: a MediaPipe shoulder-yaw count is not the same thing as the Technical
+// Panel's blade-at-contact rotation call. It often under-counts because shoulders
+// close before take-off and open immediately after landing. Therefore uncertain
+// torso rotation must never create a q / < / << penalty by itself.
+export function rotationTechnicalCall(metrics={},code='',override=''){
   const expected=expectedRotations(code);
   const measured=Math.max(0,Number(metrics.rotation)||0);
-  let reliability=clamp(Number(metrics.rotationReliability??metrics.rotationConfidence??55),0,100);
+  const reliability=clamp(Number(metrics.rotationReliability??metrics.rotationConfidence??55),0,100);
   const isAxel=/A(?:q|<|$)/.test(String(code||''));
-  const proxyBias=Number.isFinite(Number(metrics.rotationProxyBias))?Number(metrics.rotationProxyBias):(isAxel?.16:.28);
+  const proxyBias=Number.isFinite(Number(metrics.rotationProxyBias))?Number(metrics.rotationProxyBias):(isAxel?.20:.34);
   const rawDeficit=expected-measured;
   const torsoDeficit=Math.max(0,rawDeficit-proxyBias);
-  const bladeDeficit=Number(metrics.landingBladeDeficit),bladeConfidence=clamp(Number(metrics.landingBladeConfidence)||0,0,100);
-  let deficit=torsoDeficit,bladeWeight=0;
+  const bladeAlignment=Number(metrics.landingBladeDeficit);
+  const bladeConfidence=clamp(Number(metrics.landingBladeConfidence)||0,0,100);
+  const manual=String(override||metrics.rotationCallOverride||'').trim();
 
-  if(Number.isFinite(bladeDeficit)&&bladeConfidence>=45){
-    bladeWeight=clamp((bladeConfidence-35)/80,.18,.68);
-    deficit=torsoDeficit*(1-bladeWeight)+Math.max(0,bladeDeficit)*bladeWeight;
-    const disagreement=Math.abs(torsoDeficit-bladeDeficit);
-    reliability=clamp(Math.round(reliability*(1-bladeWeight)+bladeConfidence*bladeWeight-disagreement*70),25,97);
+  if(['clean','q','<','<<'].includes(manual)){
+    return {call:manual,label:`Rotation: ${manual}`,source:'confirmed',expected,measured:round(measured,2),rawDeficit:round(rawDeficit,2),deficit:round(torsoDeficit,2),torsoDeficit:round(torsoDeficit,2),bladeDeficit:Number.isFinite(bladeAlignment)?round(bladeAlignment,2):null,bladeConfidence,reliability,proxyBias};
   }
 
-  const tolerance=reliability>=80?.04:reliability>=60?.07:.10;
-  if(!Number.isFinite(measured)||measured<=0||reliability<35){
-    return {call:'review',label:'Rotation потребує перевірки',expected,measured:round(measured,2),rawDeficit:round(rawDeficit,2),deficit:round(deficit,2),torsoDeficit:round(torsoDeficit,2),bladeDeficit:Number.isFinite(bladeDeficit)?round(bladeDeficit,2):null,bladeConfidence,reliability,proxyBias,bladeWeight:round(bladeWeight,2)};
+  if(!Number.isFinite(measured)||measured<=0||reliability<45){
+    return {call:'review',suggestedCall:'review',label:'Rotation потребує перевірки',source:'proxy',expected,measured:round(measured,2),rawDeficit:round(rawDeficit,2),deficit:round(torsoDeficit,2),torsoDeficit:round(torsoDeficit,2),bladeDeficit:Number.isFinite(bladeAlignment)?round(bladeAlignment,2):null,bladeConfidence,reliability,proxyBias};
   }
 
-  let call='clean';
-  if(deficit>=.50+tolerance/2)call='<<';
-  else if(deficit>.25+tolerance)call='<';
-  else if(deficit>=.25-tolerance)call='q';
-  const label=call==='clean'?'Rotation: clean':call==='q'?'Rotation call: q (¼)':call==='<'?'Rotation call: <': 'Rotation call: <<';
-  return {call,label,expected,measured:round(measured,2),rawDeficit:round(rawDeficit,2),deficit:round(deficit,2),torsoDeficit:round(torsoDeficit,2),bladeDeficit:Number.isFinite(bladeDeficit)?round(bladeDeficit,2):null,bladeConfidence,reliability,proxyBias,bladeWeight:round(bladeWeight,2)};
+  // A clearly complete torso proxy is useful evidence for a clean call.
+  if(torsoDeficit<=.14){
+    return {call:'clean',suggestedCall:'clean',label:'Rotation: clean',source:'proxy',expected,measured:round(measured,2),rawDeficit:round(rawDeficit,2),deficit:round(torsoDeficit,2),torsoDeficit:round(torsoDeficit,2),bladeDeficit:Number.isFinite(bladeAlignment)?round(bladeAlignment,2):null,bladeConfidence,reliability,proxyBias};
+  }
+
+  // For anything near the ISU quarter/half-turn boundaries, this camera proxy is
+  // advisory only. We can suggest what to inspect, but do not apply a deduction.
+  let suggestedCall='q';
+  if(torsoDeficit>.50)suggestedCall='<<';
+  else if(torsoDeficit>.30)suggestedCall='<';
+  return {call:'review',suggestedCall,label:`Rotation: перевірити ${suggestedCall}`,source:'proxy',expected,measured:round(measured,2),rawDeficit:round(rawDeficit,2),deficit:round(torsoDeficit,2),torsoDeficit:round(torsoDeficit,2),bladeDeficit:Number.isFinite(bladeAlignment)?round(bladeAlignment,2):null,bladeConfidence,reliability,proxyBias};
 }
 
 export function estimateGOE(metrics={},code='',flags={}){
   const height=Number(metrics.height)||0,axis=Number(metrics.axis)||0,stability=Number(metrics.stability)||0;
-  const rot=rotationTechnicalCall(metrics,code);
+  const rot=rotationTechnicalCall(metrics,code,flags.rotationCall);
   const reasons=[];
   let positive=0;
 
@@ -149,28 +152,28 @@ export function estimateGOE(metrics={},code='',flags={}){
   else reasons.push(['neu','Звичайна амплітуда']);
 
   if(axis<=9){positive++;reasons.push(['pos','Контрольована вісь'])}
-  else if(axis>24)reasons.push(['neg','Сильний нахил осі']);
-  else if(axis>16)reasons.push(['neg','Помітний нахил осі']);
+  else if(axis>28)reasons.push(['neg','Сильний нахил осі']);
+  else if(axis>18)reasons.push(['neg','Помітний нахил осі']);
   else reasons.push(['neu','Вісь у робочому діапазоні']);
 
   if(stability>=82){positive++;reasons.push(['pos','Контрольований виїзд'])}
-  else if(stability<45)reasons.push(['neg','Нестабільний виїзд']);
-  else if(stability<65)reasons.push(['neg','Виїзд потребує контролю']);
+  else if(stability<30)reasons.push(['neg','Нестабільний виїзд'])
+  else if(stability<58)reasons.push(['neg','Виїзд потребує контролю'])
   else reasons.push(['neu','Приземлення без великої помилки']);
 
   if(rot.call==='clean')reasons.push(['neu','Rotation близька до повної']);
-  else if(rot.call==='q')reasons.push(['neg','Ймовірний q: близько ¼ недокруту']);
-  else if(rot.call==='<')reasons.push(['neg','Ймовірний <: більше ¼, менше ½']);
-  else if(rot.call==='<<')reasons.push(['neg','Ймовірний <<: близько ½ або більше']);
-  else reasons.push(['neu','Rotation call недостатньо надійний — без автоматичного штрафу']);
+  else if(rot.call==='q')reasons.push(['neg','q: близько ¼ недокруту']);
+  else if(rot.call==='<')reasons.push(['neg','<: більше ¼, менше ½']);
+  else if(rot.call==='<<')reasons.push(['neg','<<: близько ½ або більше']);
+  else reasons.push(['neu',`Rotation не штрафую автоматично — ${rot.suggestedCall==='review'?'потрібен чіткіший кадр леза':`перевірити ${rot.suggestedCall}`}`]);
 
   let grade=positive>=3?1:0;
   if(positive>=3&&height>=.36&&stability>=90&&axis<=5)grade=2;
 
   if(height<.13)grade-=1;
-  if(axis>24)grade-=2;else if(axis>16)grade-=1;
+  if(axis>28)grade-=2;else if(axis>18)grade-=1;
   const hasExplicitLanding=flags.hand||flags.twoFoot||flags.stepOut||flags.fall;
-  if(!hasExplicitLanding){if(stability<45)grade-=2;else if(stability<65)grade-=1}
+  if(!hasExplicitLanding){if(stability<30)grade-=2;else if(stability<58)grade-=1}
   if(rot.call==='q')grade-=2;
   else if(rot.call==='<')grade-=rot.deficit>=.40?3:2;
   else if(rot.call==='<<')grade-=rot.deficit>=.65?4:3;
@@ -180,10 +183,13 @@ export function estimateGOE(metrics={},code='',flags={}){
   if(flags.stepOut){grade-=3;reasons.push(['neg','Step-out'])}
   if(flags.fall){grade-=5;reasons.push(['neg','Fall'])}
 
+  // A fully automatic camera estimate must not invent an extreme -5 from proxy
+  // metrics alone. -5 remains available for confirmed technical/landing errors.
+  if(rot.source!=='confirmed'&&!hasExplicitLanding)grade=Math.max(grade,-3);
   grade=clamp(Math.round(grade),-5,5);
   const suffix=rot.call==='q'?'q':rot.call==='<'?'<':rot.call==='<<'?'<<':'';
   const technicalCode=suffix?`${code}${suffix}`:code;
-  return {goe:grade,goeGrade:grade,reasons,deficit:rot.deficit,rawDeficit:rot.rawDeficit,expected:rot.expected,rotationCall:rot.call,rotationReliability:rot.reliability,technicalCode,scoring:scoreElement(technicalCode,grade)};
+  return {goe:grade,goeGrade:grade,reasons,deficit:rot.deficit,rawDeficit:rot.rawDeficit,expected:rot.expected,rotationCall:rot.call,rotationSuggestedCall:rot.suggestedCall||rot.call,rotationReliability:rot.reliability,technicalCode,scoring:scoreElement(technicalCode,grade)};
 }
 
 export function scoreProgramShared(program,type='womenFS'){
