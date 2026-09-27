@@ -317,11 +317,13 @@ Use chronological motion. Take-off direction means blade travel immediately befo
     const third=zoom.length ? await ask(zoom,'zoomed lower-body replay: prioritize toe-pick contact, take-off edge and skating foot') : null;
     const toeEvidence=zoom.length ? await detectToePickEvidence(zoom,i+1) : {toe_contact:'unclear',toe_pick_foot:'unclear',both_skates_continuously_clear:'no',confidence:0};
     const pattern=zoom.length ? await classifyJumpPattern(zoom,i+1) : {type:'UNRESOLVED',confidence:0,toe_jump_likely:'unclear'};
+    const rankWide=await rankJumpTypesFromReplay(wide,i+1,'wide context');
+    const rankZoom=zoom.length ? await rankJumpTypesFromReplay(zoom,i+1,'zoomed take-off') : {best_type:'UNRESOLVED',confidence:0,scores:{},evidence:'no zoom'};
     if (third) {
       if (toeEvidence.toe_contact==='yes') { third.toe_assist='yes'; if (toeEvidence.toe_pick_foot && toeEvidence.toe_pick_foot!=='unclear') third.toe_pick_foot=toeEvidence.toe_pick_foot; }
       if (third.toe_assist==='no' && !(toeEvidence.toe_contact==='no' && toeEvidence.both_skates_continuously_clear==='yes' && confidencePct(toeEvidence.confidence)>=75)) third.toe_assist='unclear';
     }
-    console.log('jump identity zoom', JSON.stringify({jump:i+1,cropNorm,zoomFrames:zoom.length,third,toeEvidence,pattern}));
+    console.log('jump identity zoom', JSON.stringify({jump:i+1,cropNorm,zoomFrames:zoom.length,third,toeEvidence,pattern,rankWide,rankZoom}));
     const type1=inferJumpTypeFromMechanics(first);
     const type2=inferJumpTypeFromMechanics(second);
     const type3=third ? inferJumpTypeFromMechanics(third) : 'UNRESOLVED';
