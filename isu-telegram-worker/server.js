@@ -15,6 +15,7 @@ const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const TARGET_CHAT_ID = Number(process.env.TARGET_CHAT_ID || '-5368053565');
 const MODEL = process.env.OPENAI_MODEL || 'gpt-5.6-sol';
 const WEBHOOK_SECRET = process.env.TELEGRAM_WEBHOOK_SECRET || '';
+const PUBLIC_URL = process.env.PUBLIC_URL || '';
 
 if (!BOT_TOKEN || !OPENAI_API_KEY) throw new Error('Missing required secrets');
 const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
@@ -146,4 +147,12 @@ app.post('/telegram', async (req, res) => {
   }
 });
 
-app.listen(PORT, () => console.log(`ISU worker listening on ${PORT}`));
+app.listen(PORT, async () => {
+  console.log(`ISU worker listening on ${PORT}`);
+  if (PUBLIC_URL) {
+    try {
+      await tg('setWebhook', { url: `${PUBLIC_URL}/telegram`, secret_token: WEBHOOK_SECRET, allowed_updates: ['message'], drop_pending_updates: true });
+      console.log('Telegram webhook configured');
+    } catch (e) { console.error('Webhook setup failed', e); }
+  }
+});
