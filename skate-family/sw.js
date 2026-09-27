@@ -1,16 +1,16 @@
-const CACHE='skate-v14';
+const CACHE='skate-v15';
 const ASSETS=[
   '/',
   '/manifest.webmanifest?v=7',
   '/icons/skate-180-v7.png',
   '/icons/skate-192-v7.png',
   '/icons/skate-512-v6.png',
-  '/src/main.js?v=10',
+  '/src/main.js?v=11',
   '/src/style.css?v=5',
   '/src/program.css?v=1',
-  '/src/analyzer.js?v=13',
+  '/src/analyzer.js?v=14',
   '/src/programJudge.js?base=1',
-  '/src/programJudgeUnified.js',
+  '/src/programJudgeUnified.js?v=2',
   '/src/scoringEngine.js?v=13',
   '/src/jumpClassifier.js',
   '/src/db.js'
