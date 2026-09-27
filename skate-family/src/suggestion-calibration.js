@@ -60,12 +60,56 @@ function finishCalibrationNote(){
   setStatus(`SKATE пропонує: ${label}. Перший стрибок у неоднозначній парі Salchow / Toe Loop обрано обережно як Salchow. Якщо це Toe Loop — зміни тип вручну, SKATE запам'ятає виправлення.`);
 }
 
+function fixCascadeGOEPresentation(){
+  const titles=[...document.querySelectorAll('.section-title h2')];
+  const resultTitle=titles.find(n=>n.textContent.trim()==='Результат каскаду');
+  if(resultTitle){
+    resultTitle.textContent='Єдина оцінка каскаду';
+    const card=resultTitle.parentElement?.nextElementSibling;
+    if(card){
+      const label=[...card.querySelectorAll('.k')].find(n=>n.textContent.includes('ESTIMATED GOE КАСКАДУ'));
+      if(label)label.textContent='ЄДИНИЙ ESTIMATED GOE КАСКАДУ';
+    }
+  }
+
+  const diagTitle=titles.find(n=>n.textContent.trim()==='Діагностика стрибків'||n.textContent.trim()==='Стрибки в каскаді');
+  if(!diagTitle)return;
+  const header=diagTitle.parentElement;
+  diagTitle.textContent='Стрибки в каскаді';
+  const counter=header?.querySelector('span');
+  if(counter)counter.textContent='без окремого GOE';
+
+  let note=header?.nextElementSibling;
+  if(!note?.matches?.('[data-cascade-goe-note]')){
+    note=document.createElement('div');
+    note.dataset.cascadeGoeNote='1';
+    note.style.cssText='margin:-1px 0 10px;padding:10px 12px;border-radius:12px;background:#edf6ff;color:#28536f;font-size:11px;line-height:1.45;font-weight:800';
+    note.textContent='Для каскаду GOE виставляється один на весь елемент. Нижче — лише технічна діагностика кожного стрибка.';
+    header?.insertAdjacentElement('afterend',note);
+  }
+
+  const grid=note?.nextElementSibling;
+  if(!grid)return;
+  [...grid.children].forEach(card=>{
+    if(card.dataset.cascadeDiagnosticFixed==='1')return;
+    const goe=card.querySelector('.goe');
+    if(goe){
+      const block=goe.parentElement;
+      if(block){
+        block.innerHTML='<div class="k">ТЕХНІЧНА ДІАГНОСТИКА</div><div style="font-size:12px;color:var(--muted);font-weight:850;margin-top:4px">без окремого GOE</div>';
+      }
+    }
+    card.dataset.cascadeDiagnosticFixed='1';
+  });
+}
+
 function schedule(){
   if(scheduled)return;
   scheduled=true;
   requestAnimationFrame(()=>{
     scheduled=false;
     rehydrateSuggestionState();
+    fixCascadeGOEPresentation();
     if(calibratedFirst)setTimeout(finishCalibrationNote,80);
   });
 }
