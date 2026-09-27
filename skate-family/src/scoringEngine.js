@@ -104,34 +104,82 @@ export function expectedRotations(code=''){
   return Number(m[1])+(m[2]==='A'?0.5:0);
 }
 
-export function estimateGOE(metrics={},code='',flags={}){
+// The Technical Panel judges missing rotation at blade contact, not by torso yaw.
+// MediaPipe gives us torso rotation, which systematically under-counts some pre/post
+// blade rotation. We therefore remove a calibrated proxy bias and widen the exact
+// 1/4 and 1/2 thresholds by the measured rotation reliability instead of treating
+// raw shoulder yaw as a literal blade-angle call.
+export function rotationTechnicalCall(metrics={},code=''){
   const expected=expectedRotations(code);
-  const rotation=Number(metrics.rotation)||0;
-  const deficit=expected-rotation;
-  let grade=0;const reasons=[];
+  const measured=Math.max(0,Number(metrics.rotation)||0);
+  const reliability=clamp(Number(metrics.rotationReliability??metrics.rotationConfidence??55),0,100);
+  const isAxel=/A(?:q|<|$)/.test(String(code||''));
+  const proxyBias=Number.isFinite(Number(metrics.rotationProxyBias))?Number(metrics.rotationProxyBias):(isAxel?.16:.28);
+  const rawDeficit=expected-measured;
+  const deficit=Math.max(0,rawDeficit-proxyBias);
+  const tolerance=reliability>=80?.04:reliability>=60?.07:.10;
+
+  if(!Number.isFinite(measured)||measured<=0||reliability<35){
+    return {call:'review',label:'Rotation потребує перевірки',expected,measured:round(measured,2),rawDeficit:round(rawDeficit,2),deficit:round(deficit,2),reliability,proxyBias};
+  }
+  let call='clean';
+  if(deficit>=.50+tolerance/2)call='<<';
+  else if(deficit>.25+tolerance)call='<';
+  else if(deficit>=.25-tolerance)call='q';
+  const label=call==='clean'?'Rotation: clean':call==='q'?'Rotation call: q (¼)':call==='<'?'Rotation call: <': 'Rotation call: <<';
+  return {call,label,expected,measured:round(measured,2),rawDeficit:round(rawDeficit,2),deficit:round(deficit,2),reliability,proxyBias};
+}
+
+export function estimateGOE(metrics={},code='',flags={}){
   const height=Number(metrics.height)||0,axis=Number(metrics.axis)||0,stability=Number(metrics.stability)||0;
-  let bullets=0;
-  if(height>=.30){bullets++;reasons.push(['pos','Добра висота / амплітуда'])}
-  else if(height<.15){grade-=1;reasons.push(['neg','Низька амплітуда'])}
+  const rot=rotationTechnicalCall(metrics,code);
+  const reasons=[];
+  let positive=0;
+
+  if(height>=.28){positive++;reasons.push(['pos','Добра висота / амплітуда'])}
+  else if(height<.13)reasons.push(['neg','Низька амплітуда']);
   else reasons.push(['neu','Звичайна амплітуда']);
-  if(axis<=7){bullets++;reasons.push(['pos','Контрольована вісь'])}
-  else if(axis>24){grade-=2;reasons.push(['neg','Сильний нахил осі'])}
-  else if(axis>15){grade-=1;reasons.push(['neg','Помітний нахил осі'])}
-  if(stability>=82){bullets++;reasons.push(['pos','Контрольований виїзд'])}
-  else if(stability<48){grade-=2;reasons.push(['neg','Нестабільний виїзд'])}
-  else if(stability<65){grade-=1;reasons.push(['neg','Виїзд потребує контролю'])}
-  if(deficit>.50){grade-=4;reasons.push(['neg','Значний недокрут'])}
-  else if(deficit>.27){grade-=2;reasons.push(['neg','Ймовірний <'])}
-  else if(deficit>.10){grade-=1;reasons.push(['neg','Можливий q'])}
-  else reasons.push(['neu','Rotation близька до повної']);
-  if(flags.hand){grade-=1;reasons.push(['neg','Дотик рукою'])}
+
+  if(axis<=9){positive++;reasons.push(['pos','Контрольована вісь'])}
+  else if(axis>24)reasons.push(['neg','Сильний нахил осі']);
+  else if(axis>16)reasons.push(['neg','Помітний нахил осі']);
+  else reasons.push(['neu','Вісь у робочому діапазоні']);
+
+  if(stability>=82){positive++;reasons.push(['pos','Контрольований виїзд'])}
+  else if(stability<45)reasons.push(['neg','Нестабільний виїзд']);
+  else if(stability<65)reasons.push(['neg','Виїзд потребує контролю']);
+  else reasons.push(['neu','Приземлення без великої помилки']);
+
+  if(rot.call==='clean')reasons.push(['neu','Rotation близька до повної']);
+  else if(rot.call==='q')reasons.push(['neg','Ймовірний q: близько ¼ недокруту']);
+  else if(rot.call==='<')reasons.push(['neg','Ймовірний <: більше ¼, менше ½']);
+  else if(rot.call==='<<')reasons.push(['neg','Ймовірний <<: близько ½ або більше']);
+  else reasons.push(['neu','Rotation call недостатньо надійний — без автоматичного штрафу']);
+
+  // With only camera metrics we deliberately keep the positive start modest.
+  // Three strong measurable bullets can justify +1; only exceptional execution +2.
+  let grade=positive>=3?1:0;
+  if(positive>=3&&height>=.36&&stability>=90&&axis<=5)grade=2;
+
+  // ISU-style reductions. q is a -2 reduction. < and << are ranges; choose the
+  // conservative end according to how close the estimated blade deficit is to 1/2.
+  if(height<.13)grade-=1;
+  if(axis>24)grade-=2;else if(axis>16)grade-=1;
+  const hasExplicitLanding=flags.hand||flags.twoFoot||flags.stepOut||flags.fall;
+  if(!hasExplicitLanding){if(stability<45)grade-=2;else if(stability<65)grade-=1}
+  if(rot.call==='q')grade-=2;
+  else if(rot.call==='<')grade-=rot.deficit>=.40?3:2;
+  else if(rot.call==='<<')grade-=rot.deficit>=.65?4:3;
+
+  if(flags.hand){grade-=1;reasons.push(['neg','Дотик рукою / вільною ногою'])}
   if(flags.twoFoot){grade-=2;reasons.push(['neg','Приземлення на дві ноги'])}
   if(flags.stepOut){grade-=3;reasons.push(['neg','Step-out'])}
   if(flags.fall){grade-=5;reasons.push(['neg','Fall'])}
-  const hasError=grade<0||flags.hand||flags.twoFoot||flags.stepOut||flags.fall||deficit>.10||stability<65||axis>15;
-  if(!hasError){if(bullets>=3)grade+=1;if(bullets>=3&&height>=.36&&stability>=88&&axis<=5)grade+=1}
+
   grade=clamp(Math.round(grade),-5,5);
-  return {goe:grade,goeGrade:grade,reasons,deficit:round(deficit,2),expected,scoring:scoreElement(code,grade)};
+  const suffix=rot.call==='q'?'q':rot.call==='<'?'<':rot.call==='<<'?'<<':'';
+  const technicalCode=suffix?`${code}${suffix}`:code;
+  return {goe:grade,goeGrade:grade,reasons,deficit:rot.deficit,rawDeficit:rot.rawDeficit,expected:rot.expected,rotationCall:rot.call,rotationReliability:rot.reliability,technicalCode,scoring:scoreElement(technicalCode,grade)};
 }
 
 export function scoreProgramShared(program,type='womenFS'){
