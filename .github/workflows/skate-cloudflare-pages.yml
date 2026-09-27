@@ -18,15 +18,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Normalize Cloudflare API token
+        shell: bash
+        env:
+          RAW_CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          TOKEN="$(printf '%s' "$RAW_CLOUDFLARE_API_TOKEN" | tr -d '\r\n')"
+          echo "::add-mask::$TOKEN"
+          printf 'CLOUDFLARE_API_TOKEN=%s\n' "$TOKEN" >> "$GITHUB_ENV"
+
       - name: Ensure Cloudflare Pages project exists
         continue-on-error: true
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          command: pages project create skate-family --production-branch=skate-cloudflare
+        shell: bash
+        run: npx --yes wrangler@4.141.0 pages project create skate-family --production-branch=skate-cloudflare
 
       - name: Deploy to Cloudflare Pages
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          command: pages deploy skate-family --project-name=skate-family --branch=skate-cloudflare
+        shell: bash
+        run: npx --yes wrangler@4.141.0 pages deploy skate-family --project-name=skate-family --branch=skate-cloudflare
