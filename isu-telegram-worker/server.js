@@ -119,6 +119,13 @@ app.post('/telegram', async (req, res) => {
 
   try {
     await tg('sendChatAction', { chat_id: msg.chat.id, action: 'typing' });
+    const etaSeconds = (video.duration || 0) <= 10 ? 45 : (video.duration || 0) <= 30 ? 75 : 120;
+    const progress = await tg('sendMessage', {
+      chat_id: msg.chat.id,
+      text: `⏳ Аналізую відео… Орієнтовно ${etaSeconds < 60 ? etaSeconds + ' с' : Math.ceil(etaSeconds / 60) + ' хв'}.`,
+      reply_to_message_id: msg.message_id,
+      allow_sending_without_reply: true
+    });
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'isu-'));
     const videoPath = path.join(dir, 'input.mp4');
     await fs.writeFile(videoPath, await downloadTelegramFile(video.file_id));
@@ -127,11 +134,10 @@ app.post('/telegram', async (req, res) => {
     if (!frames.length) throw new Error('No frames extracted');
     const result = await analyze(frames, duration, msg.caption || '');
     const text = (`⛸ ISU Judge 2026/27\n\n${result}`).slice(0, 4000);
-    await tg('sendMessage', {
+    await tg('editMessageText', {
       chat_id: msg.chat.id,
-      text,
-      reply_to_message_id: msg.message_id,
-      allow_sending_without_reply: true
+      message_id: progress.message_id,
+      text
     });
     await fs.rm(dir, { recursive: true, force: true });
   } catch (err) {
