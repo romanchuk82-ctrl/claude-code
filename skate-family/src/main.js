@@ -73,7 +73,22 @@ function passResult(){
   const passes=state.pass?.passes||[];
   const scored=passes.map(x=>({...x,...scoreJumpPass(x)}));
   const total=scored.reduce((s,x)=>s+x.score,0);
-  return `<div class="section-title"><h2>Стрибкові елементи</h2><span>${scored.length}</span></div><section class="card protocol-card"><div class="protocol-head"><span># / час</span><span>Елемент</span><span>GOE</span><span>Score</span></div>${scored.length?scored.map((x,i)=>passRow(x,i)).join(''):'<div class="empty">Стрибків не знайдено. Спробуй фрагмент, де весь take-off і landing у кадрі.</div>'}</section><section class="card total-card"><div><div class="k">TOTAL ELEMENT SCORE</div><div class="big-total">${total.toFixed(2)}</div></div><div class="score-stack"><div><span>detected</span><b>${scored.length}</b></div><div><span>confidence</span><b>${state.pass.confidence||0}%</b></div></div></section><button class="primary" id="savePass">Зберегти серію</button>`;
+  const combo=state.passSelection?.length>1?comboGOECard():'';
+  return `<div class="section-title"><h2>Стрибкові елементи</h2><span>${scored.length}</span></div><section class="card protocol-card"><div class="protocol-head"><span># / час</span><span>Елемент</span><span>GOE</span><span>Score</span></div>${scored.length?scored.map((x,i)=>passRow(x,i)).join(''):'<div class="empty">Стрибків не знайдено. Спробуй фрагмент, де весь take-off і landing у кадрі.</div>'}</section><section class="card total-card"><div><div class="k">TOTAL ELEMENT SCORE</div><div class="big-total">${total.toFixed(2)}</div></div><div class="score-stack"><div><span>detected</span><b>${scored.length}</b></div><div><span>confidence</span><b>${state.pass.confidence||0}%</b></div></div></section>${combo}<button class="primary" id="savePass">Зберегти серію</button>`;
+}
+
+function comboGOECard(){
+  const sel=state.passSelection||[],p=state.pass||{};
+  const jumps=(p.jumps||[]).slice(0,sel.length);
+  const grades=jumps.map(x=>Number.isFinite(Number(x.goeGrade))?Number(x.goeGrade):Number(x.goe)||0);
+  const goe=grades.length?clamp(Math.round(Math.min(...grades)),-5,5):0;
+  const metrics=jumps.map(x=>x.metrics||{});
+  const stability=metrics.length?metrics.reduce((a,m)=>a+(Number(m.stability)||0),0)/metrics.length:0;
+  const gaps=[];for(let i=1;i<metrics.length;i++){const a=metrics[i-1],b=metrics[i];if(Number.isFinite(a.landing)&&Number.isFinite(b.takeoff))gaps.push(b.takeoff-a.landing)}
+  const maxGap=gaps.length?Math.max(...gaps):null;
+  const good=maxGap!=null&&maxGap<=.55?'Гарний ритм між стрибками без зайвої паузи.':stability>=75?'Достатньо стабільні приземлення та контроль корпусу.':'Каскад виконаний у заданому складі.';
+  const bad=maxGap!=null&&maxGap>.55?'Між стрибками є помітна пауза, що знижує якість каскаду.':stability&&stability<65?'Є втрата стабільності на приземленні.':goe<0?'Один з елементів має помітну помилку, тому GOE всього каскаду знижується.':'Суттєвих помилок детектор не бачить.';
+  return `<div class="section-title"><h2>GOE каскаду</h2><span>одна оцінка за весь елемент</span></div><section class="card combo-goe-card"><div class="combo-goe-value ${goe>0?'positive':goe<0?'negative':''}">${goe>0?'+':''}${goe}</div><div class="combo-goe-code">${sel.join(' + ')}</div><div class="combo-notes"><div><b>✓ Гарно</b><p>${good}</p></div><div><b>△ Покращити</b><p>${bad}</p></div></div></section>`;
 }
 
 function elementOptions(selected){return ELEMENT_OPTIONS.map(([v,l])=>`<option value="${v}" ${selected===v?'selected':''}>${l}</option>`).join('')}
