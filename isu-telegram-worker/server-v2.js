@@ -340,11 +340,13 @@ Use chronological motion. Take-off direction means blade travel immediately befo
     const pattern=zoom.length ? await classifyJumpPattern(zoom,i+1) : {type:'UNRESOLVED',confidence:0,toe_jump_likely:'unclear'};
     const rankWide=await rankJumpTypesFromReplay(wide,i+1,'wide context');
     const rankZoom=zoom.length ? await rankJumpTypesFromReplay(zoom,i+1,'zoomed take-off') : {best_type:'UNRESOLVED',confidence:0,scores:{},evidence:'no zoom'};
+    const kinematics=await analyzeKinematicSignature(zoom.length?zoom:dense,i+1);
+    const kineType=inferFromKinematics(kinematics);
     if (third) {
       if (toeEvidence.toe_contact==='yes') { third.toe_assist='yes'; if (toeEvidence.toe_pick_foot && toeEvidence.toe_pick_foot!=='unclear') third.toe_pick_foot=toeEvidence.toe_pick_foot; }
       if (third.toe_assist==='no' && !(toeEvidence.toe_contact==='no' && toeEvidence.both_skates_continuously_clear==='yes' && confidencePct(toeEvidence.confidence)>=75)) third.toe_assist='unclear';
     }
-    console.log('jump identity zoom', JSON.stringify({jump:i+1,cropNorm,zoomFrames:zoom.length,third,toeEvidence,pattern,rankWide,rankZoom}));
+    console.log('jump identity zoom', JSON.stringify({jump:i+1,cropNorm,zoomFrames:zoom.length,third,toeEvidence,pattern,rankWide,rankZoom,kinematics,kineType}));
     const type1=inferJumpTypeFromMechanics(first);
     const type2=inferJumpTypeFromMechanics(second);
     const type3=third ? inferJumpTypeFromMechanics(third) : 'UNRESOLVED';
@@ -367,8 +369,19 @@ Use chronological motion. Take-off direction means blade travel immediately befo
     else if (toeNegativeReliable && patternStrong && ['A','S','Lo'].includes(patternType)) consensus_type=patternType;
     else if (toeNegativeReliable && confidencePct(first.confidence)>=70 && confidencePct(second.confidence)>=70 && type1!=='UNRESOLVED' && type1===type2 && type1!=='A') consensus_type=type1;
     else if (toeNegativeReliable && typeMerged!=='UNRESOLVED' && [type1,type2,type3].filter(x=>x===typeMerged).length>=2) consensus_type=typeMerged;
-    const candidates=[...new Set([patternType,type1,type2,type3,typeMerged,...(pattern?.alternatives||[])].filter(x=>x && x!=='UNRESOLVED'))];
-    results.push({jump:i+1,consensus_type,toe_evidence:toeEvidence,pattern_classifier:pattern,mechanics_full:first,mechanics_takeoff:second,mechanics_zoom:third,cropNorm,merged_mechanics:merged,candidates});
+    const templateAgree=rankWide.best_type!=='UNRESOLVED' && rankWide.best_type===rankZoom.best_type && confidencePct(rankWide.confidence)>=65 && confidencePct(rankZoom.confidence)>=65;
+    if (kineType!=='UNRESOLVED' && confidencePct(kinematics.confidence)>=75) {
+      if (patternType===kineType || rankWide.best_type===kineType || rankZoom.best_type===kineType) consensus_type=kineType;
+      else if (consensus_type!=='UNRESOLVED' && consensus_type!==kineType) consensus_type='UNRESOLVED';
+    }
+    if (templateAgree) {
+      const t=rankWide.best_type; const toeFamily=['Lz','F','T'].includes(t);
+      if ((toeFamily && toeEvidence.toe_contact!=='no') || (!toeFamily && toeNegativeReliable)) {
+        if (consensus_type==='UNRESOLVED' || consensus_type===t) consensus_type=t; else consensus_type='UNRESOLVED';
+      }
+    }
+    const candidates=[...new Set([kineType,patternType,type1,type2,type3,typeMerged,rankWide.best_type,rankZoom.best_type,...(pattern?.alternatives||[])].filter(x=>x && x!=='UNRESOLVED'))];
+    results.push({jump:i+1,consensus_type,toe_evidence:toeEvidence,pattern_classifier:pattern,template_wide:rankWide,template_zoom:rankZoom,kinematics,mechanics_full:first,mechanics_takeoff:second,mechanics_zoom:third,cropNorm,merged_mechanics:merged,candidates});
   }
   return results;
 }
