@@ -22,23 +22,40 @@ jobs:
         run: |
           node --experimental-default-type=module -e "import('./skate-family/src/scoringEngine.js').then(m=>{const r=m.runScoringBenchmark(); console.log(JSON.stringify({ok:r.ok,base:r.base,tes:r.tes,pcs:r.pcs,total:r.total,expected:r.expected},null,2)); if(!r.ok) process.exit(1)})"
 
-      - name: Resolve Cloudflare account
+      - name: Normalize Cloudflare API token
+        shell: bash
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          RAW_CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
-          set -euo pipefail
-          ACCOUNT_ID=$(curl -fsS https://api.cloudflare.com/client/v4/accounts \
-            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
-            -H "Content-Type: application/json" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d.get('success') and d.get('result'); print(d['result'][0]['id'])")
-          echo "CLOUDFLARE_ACCOUNT_ID=${ACCOUNT_ID}" >> "$GITHUB_ENV"
+          TOKEN="$(printf '%s' "$RAW_CLOUDFLARE_API_TOKEN" | tr -d '\r\n' | grep -oE '[A-Za-z0-9_-]{30,}' | tail -n 1)"
+          if [ -z "$TOKEN" ]; then
+            echo 'Cloudflare token could not be normalized.' >&2
+            exit 1
+          fi
+          echo "::add-mask::$TOKEN"
+          printf 'CLOUDFLARE_API_TOKEN=%s\n' "$TOKEN" >> "$GITHUB_ENV"
 
       - name: Deploy production
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ env.CLOUDFLARE_ACCOUNT_ID }}
+        shell: bash
         run: |
-          npx --yes wrangler@4 pages deploy skate-family \
+          npx --yes wrangler@4.141.0 pages deploy skate-family \
             --project-name=skate-family \
-            --branch=skate-family-pwa \
-            --commit-hash="${GITHUB_SHA}" \
-            --commit-message="${{ github.event.head_commit.message || 'Manual SKATE deploy' }}"
+            --branch=skate-cloudflare \
+            --commit-dirty=true
+
+      - name: Verify production files
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --location --retry 6 --retry-delay 2 --retry-all-errors \
+            --output /tmp/skate-index https://skate-family.pages.dev/
+          grep -q 'main.js?v=8' /tmp/skate-index
+
+          curl --fail --silent --show-error --location --retry 6 --retry-delay 2 --retry-all-errors \
+            --output /tmp/skate-engine https://skate-family.pages.dev/src/scoringEngine.js
+          grep -q 'SONYA_MAY_2026_BENCHMARK' /tmp/skate-engine
+
+          curl --fail --silent --show-error --location --retry 6 --retry-delay 2 --retry-all-errors \
+            --output /tmp/skate-unified https://skate-family.pages.dev/src/programJudgeUnified.js
+          grep -q 'shared-ijs-v3-unified' /tmp/skate-unified
+          echo 'SKATE Cloudflare Pages production verification passed.'
