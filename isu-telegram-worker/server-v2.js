@@ -22,6 +22,11 @@ if (!BOT_TOKEN || !OPENAI_API_KEY) throw new Error('Missing required secrets');
 const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 const RULES = await fs.readFile(new URL('./project-rules.md', import.meta.url), 'utf8');
 const processed = new Set();
+const pendingVideoByChat = new Map();
+
+function isRunCommand(msg) {
+  return String(msg?.text || '').trim().toLocaleLowerCase('uk-UA') === 'роби';
+}
 
 async function tg(method, body) {
   const r = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/${method}`, {
@@ -627,11 +632,28 @@ app.post('/telegram', async (req, res) => {
   const msg = req.body.message || req.body.channel_post;
   if (!msg || Number(msg.chat?.id) !== TARGET_CHAT_ID) return;
   const video = pickVideo(msg);
-  if (!video) return;
-  const key = `${msg.chat.id}:${msg.message_id}`;
+  if (video) {
+    pendingVideoByChat.set(Number(msg.chat.id), { msg, video });
+    return;
+  }
+  if (!isRunCommand(msg)) return;
+
+  const pending = pendingVideoByChat.get(Number(msg.chat.id));
+  if (!pending) {
+    await tg('sendMessage', {
+      chat_id: msg.chat.id,
+      text: '⚠️ Не бачу відео перед командою «роби». Спочатку надішли відео.',
+      reply_to_message_id: msg.message_id,
+      allow_sending_without_reply: true
+    }).catch(() => {});
+    return;
+  }
+
+  const key = `${pending.msg.chat.id}:${pending.msg.message_id}`;
   if (processed.has(key)) return;
   processed.add(key);
-  processVideoMessage(msg, video).catch(err => console.error('unhandled processVideoMessage', err));
+  pendingVideoByChat.delete(Number(msg.chat.id));
+  processVideoMessage(pending.msg, pending.video).catch(err => console.error('unhandled processVideoMessage', err));
 });
 
 app.listen(PORT, async () => {
