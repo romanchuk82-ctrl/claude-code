@@ -23,7 +23,11 @@ jobs:
         env:
           RAW_CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
-          TOKEN="$(printf '%s' "$RAW_CLOUDFLARE_API_TOKEN" | tr -d '\r\n')"
+          TOKEN="$(printf '%s' "$RAW_CLOUDFLARE_API_TOKEN" | tr -d '\r\n' | grep -oE '[A-Za-z0-9_-]{30,}' | tail -n 1)"
+          if [ -z "$TOKEN" ]; then
+            echo 'Cloudflare token could not be normalized.' >&2
+            exit 1
+          fi
           echo "::add-mask::$TOKEN"
           printf 'CLOUDFLARE_API_TOKEN=%s\n' "$TOKEN" >> "$GITHUB_ENV"
 
