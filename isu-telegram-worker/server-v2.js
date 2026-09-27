@@ -112,6 +112,28 @@ async function createTextResponse(input, { primaryEffort='high', primaryTokens=4
   throw new Error('OpenAI returned no textual answer after 3 attempts' + (last?.status ? ' (' + last.status + ')' : ''));
 }
 
+async function createJsonResponse(input, { label='json', primaryEffort='medium', primaryTokens=1000 } = {}) {
+  const attempts = [
+    { effort: primaryEffort, tokens: primaryTokens },
+    { effort: 'low', tokens: Math.max(primaryTokens, 1400) },
+    { effort: 'low', tokens: Math.max(primaryTokens, 1800) }
+  ];
+  for (let i = 0; i < attempts.length; i++) {
+    const a = attempts[i];
+    try {
+      const response = await openai.responses.create({ model: MODEL, reasoning:{ effort:a.effort }, max_output_tokens:a.tokens, input });
+      const text = textFromResponse(response);
+      if (!text) { console.log('OpenAI JSON empty', { label, attempt:i+1, status:response.status }); continue; }
+      const parsed = parseJsonLoose(text);
+      console.log('OpenAI JSON ok', { label, attempt:i+1 });
+      return parsed;
+    } catch (e) {
+      console.log('OpenAI JSON retry', { label, attempt:i+1, error:String(e?.message || e).slice(0,160) });
+    }
+  }
+  return null;
+}
+
 function parseJsonLoose(text) {
   if (!text) throw new Error('empty locator response');
   const cleaned = text.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim();
@@ -133,8 +155,7 @@ Duration=${duration.toFixed(2)}s. Caption=${caption || '(none)'}.` }];
     content.push({ type: 'input_text', text: `t=${f.time.toFixed(3)}s` });
     content.push({ type: 'input_image', image_url: `data:image/jpeg;base64,${b64}`, detail: 'low' });
   }
-  const response = await openai.responses.create({ model: MODEL, reasoning: { effort: 'medium' }, max_output_tokens: 500, input: [{ role: 'user', content }] });
-  return parseJsonLoose(textFromResponse(response));
+  return await createJsonResponse([{ role: 'user', content }], { label:'element-classifier', primaryEffort:'medium', primaryTokens:700 }) || { category:'unknown', confidence:0, notes:'classification unresolved' };
 }
 
 async function locateJumpStructure(frames, duration, caption) {
@@ -148,13 +169,7 @@ Duration=${duration?.toFixed(2) || 'unknown'}s. Caption=${caption || '(none)'}.`
     content.push({ type: 'input_text', text: `t=${f.time.toFixed(3)}s` });
     const b64 = (await fs.readFile(f.path)).toString('base64');
     content.push({ type: 'input_image', image_url: `data:image/jpeg;base64,${b64}`, detail: 'low' });
-  }  const response = await openai.responses.create({
-    model: MODEL,
-    reasoning: { effort: 'medium' },
-    max_output_tokens: 700,
-    input: [{ role: 'user', content }]
-  });
-  const parsed = parseJsonLoose(textFromResponse(response));
+  }  const parsed = await createJsonResponse([{ role: 'user', content }], { label:'jump-locator', primaryEffort:'medium', primaryTokens:900 }) || { relationship:'unknown', jumps:[], clip_confidence:0, notes:'locator unresolved' };
   parsed.jumps = Array.isArray(parsed.jumps) ? parsed.jumps.slice(0, 4) : [];
   return parsed;
 }
@@ -220,8 +235,7 @@ Method=${method}.` }];
         const b64=(await fs.readFile(f.path)).toString('base64');
         content.push({ type: 'input_image', image_url:`data:image/jpeg;base64,${b64}`, detail:'high' });
       }
-      const response = await openai.responses.create({ model: MODEL, reasoning:{ effort:'high' }, max_output_tokens:900, input:[{role:'user',content}] });
-      return parseJsonLoose(textFromResponse(response));
+      return await createJsonResponse([{role:'user',content}], { label:`jump-identity-${i+1}-${method}`, primaryEffort:'high', primaryTokens:1100 }) || { type:'UNRESOLVED', confidence:0, toe_assist:'unclear', takeoff_direction:'unclear', takeoff_edge:'unclear', evidence:'identity pass unresolved', alternatives:[] };
     };
     const first = await ask(wide, 'wide normal-context mechanics');
     const second = await ask(dense, 'dense take-off mechanics, independent second opinion');
