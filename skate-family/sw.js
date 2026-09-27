@@ -1,4 +1,4 @@
-const CACHE='skate-v11';
+const CACHE='skate-v12';
 const ASSETS=[
   '/',
   '/manifest.webmanifest?v=7',
@@ -8,10 +8,10 @@ const ASSETS=[
   '/src/main.js?v=8',
   '/src/style.css?v=5',
   '/src/program.css?v=1',
-  '/src/analyzer.js',
+  '/src/analyzer.js?v=12',
   '/src/programJudge.js?base=1',
   '/src/programJudgeUnified.js',
-  '/src/scoringEngine.js',
+  '/src/scoringEngine.js?v=12',
   '/src/jumpClassifier.js',
   '/src/db.js'
 ];
