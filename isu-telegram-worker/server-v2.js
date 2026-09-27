@@ -207,43 +207,59 @@ async function buildNormalContext(videoPath, dir, duration, locator) {
   });
 }
 
+function inferJumpTypeFromMechanics(o) {
+  const dir = o?.takeoff_direction;
+  const toe = o?.toe_assist;
+  const edge = o?.takeoff_edge;
+  const take = o?.takeoff_foot;
+  const land = o?.landing_foot;
+  const free = o?.free_leg_action;
+  if (dir === 'forward' && toe === 'no') return edge === 'outside' || edge === 'unclear' ? 'A' : 'UNRESOLVED';
+  if (dir !== 'backward') return 'UNRESOLVED';
+  if (toe === 'no') {
+    if (edge === 'inside' && (free === 'swing' || free === 'unclear')) return 'S';
+    if (edge === 'outside' && take !== 'unclear' && land !== 'unclear' && take === land) return 'Lo';
+    return 'UNRESOLVED';
+  }
+  if (toe === 'yes') {
+    if (edge === 'inside') return 'F';
+    if (edge === 'outside' && take !== 'unclear' && land !== 'unclear') return take === land ? 'T' : 'Lz';
+  }
+  return 'UNRESOLVED';
+}
+
 async function identifyJumpTypePanel(videoPath, dir, duration, locator) {
   const results = [];
   const jumps = (locator.jumps || []).filter(j => Number.isFinite(Number(j.takeoff)));
   for (let i = 0; i < jumps.length; i++) {
     const takeoff = Number(jumps[i].takeoff);
-    const start = Math.max(0, takeoff - 0.55);
-    const length = Math.min(0.85, Math.max(0.45, (duration || takeoff + 0.25) - start));
-    const wide = await extractTimedFrames(videoPath, dir, { start, length, fps: 12, width: 1280, prefix: `identity-wide-${i+1}`, max: 14 });
-    const dense = await extractTimedFrames(videoPath, dir, { start, length, fps: 24, width: 1280, prefix: `identity-dense-${i+1}`, max: 22 });
+    const landing = Number(jumps[i].landing || takeoff + 0.7);
+    const wideStart = Math.max(0, takeoff - 0.9);
+    const wideEnd = Math.min(duration || landing + 0.45, landing + 0.45);
+    const takeStart = Math.max(0, takeoff - 0.5);
+    const wide = await extractTimedFrames(videoPath, dir, { start:wideStart, length:Math.max(0.8,wideEnd-wideStart), fps:10, width:1280, prefix:`identity-wide-${i+1}`, max:24 });
+    const dense = await extractTimedFrames(videoPath, dir, { start:takeStart, length:0.75, fps:24, width:1280, prefix:`identity-dense-${i+1}`, max:20 });
     const ask = async (frames, method) => {
-      const content = [{ type: 'input_text', text:
-`ISU Technical Panel subtask: identify JUMP TYPE ONLY for jump ${i+1}. Do not determine revolutions, rotation call or GOE.
-Use the chronological take-off sequence, never the landing pose alone.
-Candidate signatures:
-A: clear forward edge take-off, no toe assist.
-T: backward outside-edge take-off with toe assist by the free foot.
-S: backward inside-edge take-off, no toe assist, free-leg swing.
-Lo: backward outside-edge take-off from the skating foot, no toe assist, typically crossed free leg.
-F: toe-assisted take-off from a backward inside edge.
-Lz: toe-assisted take-off from a backward outside edge.
-If the required signature is not reliably visible, return UNRESOLVED rather than guessing.
-Return JSON only: {"type":"A|T|S|Lo|F|Lz|UNRESOLVED","confidence":0,"toe_assist":"yes|no|unclear","takeoff_direction":"forward|backward|unclear","takeoff_edge":"inside|outside|unclear","evidence":"short","alternatives":["..."]}.
-Method=${method}.` }];
-      for (const f of frames) {
-        content.push({ type: 'input_text', text: `t=${f.time.toFixed(3)}s` });
-        const b64=(await fs.readFile(f.path)).toString('base64');
-        content.push({ type: 'input_image', image_url:`data:image/jpeg;base64,${b64}`, detail:'high' });
-      }
-      return await createJsonResponse([{role:'user',content}], { label:`jump-identity-${i+1}-${method}`, primaryEffort:'high', primaryTokens:1100 }) || { type:'UNRESOLVED', confidence:0, toe_assist:'unclear', takeoff_direction:'unclear', takeoff_edge:'unclear', evidence:'identity pass unresolved', alternatives:[] };
+      const content=[{type:'input_text',text:
+`ISU Technical Panel mechanics subtask for jump ${i+1}. OBSERVE mechanics only; do not name the jump and do not assess revolutions/GOE.
+Return JSON only with:
+{"takeoff_direction":"forward|backward|unclear","toe_assist":"yes|no|unclear","takeoff_edge":"inside|outside|unclear","takeoff_foot":"left|right|unclear","landing_foot":"left|right|unclear","free_leg_action":"swing|crossed|held|unclear","confidence":0,"evidence":"short chronological evidence"}.
+Use chronological motion. Take-off direction means direction of travel immediately before leaving the ice, not body facing. Toe assist means a distinct toe-pick plant of the free foot. If a feature is not reliably visible, use unclear. Method=${method}.` }];
+      for (const f of frames) { content.push({type:'input_text',text:`t=${f.time.toFixed(3)}s`}); const b64=(await fs.readFile(f.path)).toString('base64'); content.push({type:'input_image',image_url:`data:image/jpeg;base64,${b64}`,detail:'high'}); }
+      return await createJsonResponse([{role:'user',content}], {label:`jump-mechanics-${i+1}-${method}`,primaryEffort:'high',primaryTokens:1100}) || {takeoff_direction:'unclear',toe_assist:'unclear',takeoff_edge:'unclear',takeoff_foot:'unclear',landing_foot:'unclear',free_leg_action:'unclear',confidence:0,evidence:'unresolved'};
     };
-    const first = await ask(wide, 'wide normal-context mechanics');
-    const second = await ask(dense, 'dense take-off mechanics, independent second opinion');
-    const same = first.type === second.type && first.type !== 'UNRESOLVED';
-    const strong = Number(first.confidence) >= 75 && Number(second.confidence) >= 75;
-    const consensus_type = same && strong ? first.type : 'UNRESOLVED';
-    const alternatives = [...new Set([first.type, second.type, ...(first.alternatives || []), ...(second.alternatives || [])].filter(x => x && x !== 'UNRESOLVED'))].slice(0,3);
-    results.push({ jump:i+1, consensus_type, pass1:first, pass2:second, alternatives });
+    const first=await ask(wide,'full jump context including landing');
+    const second=await ask(dense,'dense take-off sequence');
+    const type1=inferJumpTypeFromMechanics(first);
+    const merged={...first};
+    for (const k of ['takeoff_direction','toe_assist','takeoff_edge','takeoff_foot','free_leg_action']) {
+      if (first[k] !== second[k] && second[k] !== 'unclear') merged[k]='unclear';
+    }
+    const typeMerged=inferJumpTypeFromMechanics(merged);
+    const strong=Number(first.confidence)>=70 && Number(second.confidence)>=70;
+    const consensus_type = strong && type1 !== 'UNRESOLVED' && typeMerged === type1 ? type1 : 'UNRESOLVED';
+    const candidates=[...new Set([type1,inferJumpTypeFromMechanics(second),typeMerged].filter(x=>x && x!=='UNRESOLVED'))];
+    results.push({jump:i+1,consensus_type,mechanics_full:first,mechanics_takeoff:second,merged_mechanics:merged,candidates});
   }
   return results;
 }
@@ -271,9 +287,9 @@ Duration: ${duration.toFixed(2)}s. Caption: ${caption || '(none)'}.
 A first pass located this temporal structure: ${JSON.stringify(locator)}.
 Independent jump-type panel: ${JSON.stringify(identityPanel)}.
 Treat the locator only as navigation, NOT as a technical call. It contains no valid jump-type evidence.
-For TYPE: if the two identity passes disagree or consensus_type is UNRESOLVED, do NOT force A/T/S/Lo/F/Lz. Report UNRESOLVED and list the supported alternatives.
+For TYPE: obey identityPanel consensus_type. If it is UNRESOLVED, do NOT override it or force A/T/S/Lo/F/Lz; report UNRESOLVED and only list candidates supported by the mechanics panel. If consensus_type is resolved, use that type and then determine revolutions independently from the flight/landing replay.
 Identify jump TYPE independently from the moving take-off sequence first (A/T/S/Lo/F/Lz), then revolutions, then relationship, rotation and edge. Do not infer type from the landing pose.
-First finish the Technical Call independently, then GOE.
+First finish the Technical Call independently, then GOE. If jump type OR revolution count OR landing rotation is UNRESOLVED, do not assign a numeric final GOE; report GOE as UNRESOLVED/NOT SCORED from this video.
 The NORMAL CONTEXT frames represent temporal continuity around the whole element and are for jump relationship/rhythm/take-off context.
 The DENSE REPLAY frames are 24 fps around each located jump and are the primary evidence for landing blade rotation and slow review.
 Do not claim exact q/<</edge if the blade or first actual ice contact is not reliably visible.
