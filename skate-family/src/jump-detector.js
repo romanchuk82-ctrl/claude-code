@@ -140,10 +140,17 @@ export async function detectJumpCandidates(video,{expectedCount=null,seriesMode=
         const fPeak=Math.max(...footLift.slice(Math.max(0,a),Math.min(footLift.length,b+1)));
         const freeLeg=median(spreadNorm.slice(Math.max(0,a),Math.min(spreadNorm.length,b+1)));
         if(hPeak<(relaxed?.0045:.011))continue;
-        if(fPeak<(relaxed?-.024:-.008))continue;
-        if(freeLeg>(relaxed?.90:.68)&&fPeak<(relaxed?-.003:.008))continue;
+        if(relaxed){
+          const strongHip=hPeak>=.015;
+          if(!strongHip&&fPeak<-.032)continue;
+          if(freeLeg>1.08&&fPeak<-.012&&hPeak<.022)continue;
+        }else{
+          if(fPeak<-.008)continue;
+          if(freeLeg>.68&&fPeak<.008)continue;
+        }
         const prominence=s[i]-Math.max(s[Math.max(0,a)],s[Math.min(s.length-1,b)]);
-        const support=clamp(.13+hPeak*9.2+Math.max(0,fPeak)*4.5+prominence*5.0+conf*.18-Math.max(0,freeLeg-.52)*.08,0,1);
+        const hipRescue=relaxed?Math.max(0,hPeak-.010)*5.5:0;
+        const support=clamp(.13+hPeak*9.2+Math.max(0,fPeak)*4.5+prominence*5.0+conf*.18+hipRescue-Math.max(0,freeLeg-.52)*.08,0,1);
         const score=s[i]*112+prominence*46+clamp(air,.09,.62)*7+conf*4+support*8;
         const confidence=Math.round(clamp(24+support*54+Math.min(17,prominence/Math.max(noise,.001)*3)-Math.max(0,freeLeg-.70)*12,15,97));
         out.push({time:raw[i].t,airtime:air,lift:s[i],score,support,confidence,hipLift:hPeak,footLift:fPeak,freeLeg,relaxed});
@@ -151,30 +158,53 @@ export async function detectJumpCandidates(video,{expectedCount=null,seriesMode=
       return out;
     };
 
+    const collectHipFallback=()=>{
+      const out=[],hipNoise=Math.max(.0025,mad(hipLift)),threshold=Math.max(.009,hipNoise*1.15);
+      for(let i=2;i<hipLift.length-2;i++){
+        const peak=hipLift[i];
+        if(peak<threshold||peak<hipLift[i-1]||peak<hipLift[i+1]||peak<hipLift[i-2]||peak<hipLift[i+2])continue;
+        const edge=Math.max(.0035,peak*.20);
+        let a=i,b=i;while(a>0&&hipLift[a]>edge)a--;while(b<hipLift.length-1&&hipLift[b]>edge)b++;
+        const air=raw[b].t-raw[a].t;if(air<.07||air>.85)continue;
+        const conf=avg(raw.slice(a,b+1).map(x=>x.conf));if(conf<.25)continue;
+        const fPeak=Math.max(...footLift.slice(Math.max(0,a),Math.min(footLift.length,b+1)));
+        const freeLeg=median(spreadNorm.slice(Math.max(0,a),Math.min(spreadNorm.length,b+1)));
+        const prominence=peak-Math.max(hipLift[Math.max(0,a)],hipLift[Math.min(hipLift.length-1,b)]);
+        if(prominence<Math.max(.003,hipNoise*.35))continue;
+        const support=clamp(.12+peak*8.4+Math.max(0,fPeak)*2.5+prominence*5.2+conf*.18-Math.max(0,freeLeg-.92)*.04,0,1);
+        const score=peak*108+prominence*45+clamp(air,.08,.60)*6+conf*3+support*7;
+        const confidence=Math.round(clamp(22+support*50+Math.min(18,prominence/Math.max(hipNoise,.001)*3),18,88));
+        out.push({time:raw[i].t,airtime:air,lift:s[i]||peak,score,support,confidence,hipLift:peak,footLift:fPeak,freeLeg,relaxed:true,hipFallback:true});
+      }
+      return out;
+    };
+
     const primaryPool=collect(primary,false).filter(c=>c.support>=.30);
-    const secondaryPool=collect(secondary,true).filter(c=>c.support>=.13&&c.confidence>=24);
+    const secondaryPool=collect(secondary,true).filter(c=>c.support>=(seriesMode?.09:.13)&&c.confidence>=(seriesMode?20:24));
+    const hipFallbackPool=seriesMode?collectHipFallback().filter(c=>c.support>=.12&&c.confidence>=24):[];
     let candidates=suppressMiddleFalsePositives(chooseSeparated(primaryPool,.38,10));
 
     if(expectedCount&&candidates.length<expectedCount){
-      candidates=addBest(candidates,secondaryPool,{minGap:.22,maxGap:3.2,maxCount:expectedCount,preferAfter:true});
+      const rescuePool=seriesMode?[...secondaryPool,...hipFallbackPool]:secondaryPool;
+      candidates=addBest(candidates,rescuePool,{minGap:.22,maxGap:3.2,maxCount:expectedCount,preferAfter:true});
       candidates=chooseSeparated(candidates,.26,expectedCount);
     }
 
     if(!expectedCount&&seriesMode){
-      // Auto mode is intentionally conservative: most combinations are two jumps.
-      // Returning a third weak motion after landing/fall is more harmful than asking
-      // the user to choose the explicit 3-jump mode when they really have three.
-      if(candidates.length===0&&secondaryPool.length){
-        candidates=chooseSeparated(secondaryPool,.26,2);
+      // In multi-jump mode prefer finding the second real take-off over rejecting it
+      // because the free/support foot is visually ambiguous or the landing is unstable.
+      const rescuePool=chooseSeparated([...secondaryPool,...hipFallbackPool],.22,8);
+      if(candidates.length===0&&rescuePool.length){
+        candidates=chooseSeparated(rescuePool,.26,2);
       }
       if(candidates.length===1){
         const anchor=candidates[0];
-        const secondPool=secondaryPool.filter(c=>Math.abs(c.time-anchor.time)>=.22&&Math.abs(c.time-anchor.time)<=3.5);
+        const secondPool=rescuePool.filter(c=>Math.abs(c.time-anchor.time)>=.22&&Math.abs(c.time-anchor.time)<=3.5);
         candidates=addBest(candidates,secondPool,{minGap:.22,maxGap:3.5,maxCount:2,preferAfter:true});
       }
       if(candidates.length>1){
         const top=Math.max(...candidates.map(c=>c.score));
-        candidates=candidates.filter(c=>c.score>=top*.11&&c.confidence>=22);
+        candidates=candidates.filter(c=>c.score>=top*.09&&c.confidence>=20);
         candidates=chooseSeparated(candidates,.25,2);
       }
     }else if(!expectedCount&&candidates.length>1){
